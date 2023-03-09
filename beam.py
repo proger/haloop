@@ -23,27 +23,27 @@ def ctc_beam_search_decode_probs(
 
     for t in range(time_steps):
         seqs = top_seqs[:] # proposed sequences with no changes go first
-        
+
         ext_label_probs = torch.zeros(len(top_seqs), vocab_size, dtype=torch.float32, device=emit_probs.device)
 
         for s, seq in enumerate(top_seqs):
             # case adding nothing via same-label transition
             if seq:
                 label_probs[s] *= emit_probs[t, seq[-1]]
-                
+
                 try:
                     prefix_index = top_seqs.index(seq[:-1])
                 except ValueError:
                     pass
                 else:
                     label_probs[s] += emit_probs[t, seq[-1]] * 1 * blank_probs[prefix_index]
-            
+
             # case adding nothing via a blank transition
             blank_probs[s] = seq_probs[s] * emit_probs[t, blank]
 
             # case adding one label via other-label transition
             last_sym = seq[-1] if seq else blank
-            last_sym = torch.nn.functional.one_hot(torch.tensor(last_sym), num_classes=vocab_size).float()
+            last_sym = torch.nn.functional.one_hot(torch.tensor(last_sym, device=device), num_classes=vocab_size).float()
 
             trans_prob = 1. # LM probability that this transition is valid
 
@@ -111,7 +111,7 @@ def ctc_beam_search_decode_logits(
 
             # case adding one label via other-label transition
             last_sym = seq[-1] if seq else blank
-            last_sym = torch.nn.functional.one_hot(torch.tensor(last_sym), num_classes=vocab_size)
+            last_sym = torch.nn.functional.one_hot(torch.tensor(last_sym, device=device), num_classes=vocab_size)
 
             trans_prob = 0. # LM log probability that this transition is valid
 
