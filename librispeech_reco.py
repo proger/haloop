@@ -142,9 +142,9 @@ class System:
             if i == 0:
                 for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, outputs, input_lengths):
                     seq = recognizer.log_probs(seq)[:hyp_len]
-                    print('greedy', seq.argmax(dim=-1).tolist())
+                    #print('greedy', seq.argmax(dim=-1).tolist())
                     decoded = ctc_beam_search_decode_logits(seq)
-                    print(decoded)
+                    #print(decoded)
                     hyp = vocabulary.decode(decoded[0][0])
                     ref = vocabulary.decode(ref[:ref_len])
                     print('hyp', hyp)
