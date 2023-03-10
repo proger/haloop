@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 import torchaudio
-from kaldialign import edit_distance
+from kaldialign import edit_distance, align
 
 from .beam import ctc_beam_search_decode_logits
 from .model import Encoder, Recognizer, Vocabulary
@@ -19,15 +19,6 @@ from .model import Encoder, Recognizer, Vocabulary
 console = Console()
 def print(*args, flush=False, **kwargs):
     console.log(*args, **kwargs)
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--init', type=Path)
-parser.add_argument('--save', type=Path, default='ckpt.pt')
-parser.add_argument('--log-interval', type=int, default=100)
-parser.add_argument('--num-epochs', type=int, default=30)
-parser.add_argument('--device', type=str, default='cuda:1')
-parser.add_argument('--eval', action='store_true', help="Evaluate and exit")
-args = parser.parse_args()
 
 
 class LibriSpeech(torch.utils.data.Dataset):
@@ -74,13 +65,13 @@ class System:
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
 
-    def state_dict(self):
+    def state_dict(self, **extra):
         return {
             'encoder': self.encoder.state_dict(),
             'recognizer': self.recognizer.state_dict(),
             'scaler': self.scaler.state_dict(),
             'optimizer': self.optimizer.state_dict(),
-        }
+        } | extra
 
     def train(self, epoch, train_loader):
         device = self.args.device
@@ -97,7 +88,7 @@ class System:
             targets = targets.to(device)
             input_lengths = input_lengths.to(device)
             target_lengths = target_lengths.to(device)
-            
+
             input_lengths = encoder.subsampled_lengths(input_lengths)
 
             with torch.autocast(device_type='cuda', dtype=torch.float16):
@@ -129,6 +120,7 @@ class System:
         encoder, recognizer, vocabulary = self.encoder, self.recognizer, self.vocabulary
 
         valid_loss = 0.
+        lers = []
 
         encoder.eval()
         recognizer.eval()
@@ -145,24 +137,40 @@ class System:
 
             valid_loss += loss.item()
 
-            if i == 0:
+            if i < 10:
                 for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, outputs, input_lengths):
                     seq = recognizer.log_probs(seq)[:hyp_len]
                     #print('greedy', seq.argmax(dim=-1).tolist())
                     decoded = ctc_beam_search_decode_logits(seq)
-                    #print(decoded)
-                    hyp = vocabulary.decode(decoded[0][0])
-                    ref = vocabulary.decode(ref[:ref_len])
-                    print('hyp', hyp)
-                    print('ref', ref)
-                    print('err', edit_distance(hyp, ref))
-                    print()
+                    hyp1 = vocabulary.decode(filter(None, decoded[0][0]))
+                    ref1 = vocabulary.decode(ref[:ref_len])
+                    hyp, ref = list(zip(*align(hyp1, ref1, '*')))
 
-        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / i:.3f}', flush=True)
+                    dist = edit_distance(hyp1, ref1)
+                    dist['length'] = len(ref1)
+                    dist['ler'] = round(dist['total'] / dist['length'], 2)
+
+                    if i == 0:
+                        console.print('hyp', ' '.join(h.replace(' ', '_') for h in hyp), overflow='crop')
+                        console.print('ref', ' '.join(r.replace(' ', '_') for r in ref), overflow='crop')
+                        print(dist)
+
+                    lers.append(dist['ler'])
+
+        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / i:.3f} sample ler: {sum(lers) / len(lers)}', flush=True)
         return valid_loss / i
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--init', type=Path)
+    parser.add_argument('--save', type=Path, default='ckpt.pt')
+    parser.add_argument('--log-interval', type=int, default=100)
+    parser.add_argument('--num-epochs', type=int, default=30)
+    parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--eval', action='store_true', help="Evaluate and exit")
+    args = parser.parse_args()
+
     train_set = LibriSpeech()
     train_loader = torch.utils.data.DataLoader(
         train_set,
@@ -198,7 +206,7 @@ def main():
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             print('saving model', args.save)
-            torch.save(system.state_dict(), args.save)
+            torch.save(system.state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
 
 
 if __name__ == '__main__':

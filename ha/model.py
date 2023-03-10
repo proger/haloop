@@ -55,7 +55,7 @@ class Vocabulary:
         return torch.LongTensor([self.dictionary[c.replace('2', '0')] for c in labels if c != "'"])
 
     def decode(self, labels):
-        return ' '.join('' if l == 0 else self.rdictionary[l-1] for l in labels)
+        return ['' if l == 0 else self.rdictionary[l-1] for l in labels]
 
 
 class Recognizer(nn.Module):
