@@ -74,7 +74,7 @@ class System:
         } | extra
 
     def train(self, epoch, train_loader):
-        device = self.args.device
+        args, device = self.args, self.args.device
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
 
         optimizer.zero_grad()
@@ -138,8 +138,9 @@ class System:
             valid_loss += loss.item()
 
             if i < 10:
+                outputs = recognizer.log_probs(outputs)
                 for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, outputs, input_lengths):
-                    seq = recognizer.log_probs(seq)[:hyp_len]
+                    seq = seq[:hyp_len].cpu()
                     #print('greedy', seq.argmax(dim=-1).tolist())
                     decoded = ctc_beam_search_decode_logits(seq)
                     hyp1 = vocabulary.decode(filter(None, decoded[0][0]))
