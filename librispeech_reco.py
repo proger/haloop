@@ -1,17 +1,18 @@
 import argparse
 import math
+import sys
 import time
+from itertools import chain
 from pathlib import Path
 
-import torch.utils.data
-import torchaudio
 import torch
 import torch.nn as nn
+import torch.utils.data
+import torchaudio
 from kaldialign import edit_distance
 
-from reco import Encoder, Recognizer, Vocabulary
 from beam import ctc_beam_search_decode_logits
-
+from reco import Encoder, Recognizer, Vocabulary
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--init', type=Path)
@@ -19,6 +20,7 @@ parser.add_argument('--save', type=Path, default='ckpt.pt')
 parser.add_argument('--log-interval', type=int, default=100)
 parser.add_argument('--num-epochs', type=int, default=30)
 parser.add_argument('--device', type=str, default='cuda:1')
+parser.add_argument('--eval', action='store_true', help="Evaluate and exit")
 args = parser.parse_args()
 
 
@@ -56,7 +58,7 @@ class System:
         self.args = args
         self.encoder = Encoder().to(args.device)
         self.recognizer = Recognizer().to(args.device)
-        self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=3e-4)
+        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()), lr=3e-4)
         self.scaler = torch.cuda.amp.GradScaler()
         self.vocabulary = Vocabulary()
 
@@ -74,7 +76,7 @@ class System:
             'optimizer': self.optimizer.state_dict(),
         }
 
-    def train(self, train_loader):
+    def train(self, epoch, train_loader):
         device = self.args.device
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
 
@@ -89,10 +91,12 @@ class System:
             targets = targets.to(device)
             input_lengths = input_lengths.to(device)
             target_lengths = target_lengths.to(device)
+            
+            input_lengths = encoder.subsampled_lengths(input_lengths)
 
             with torch.autocast(device_type='cuda', dtype=torch.float16):
                 outputs = encoder(inputs)
-                loss = recognizer(outputs, targets)
+                loss = recognizer(outputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
                 print(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
@@ -101,7 +105,7 @@ class System:
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), 0.1)
+            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), 0.1)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
@@ -114,7 +118,7 @@ class System:
                 t0 = t1
 
     @torch.inference_mode()
-    def evaluate(self, valid_loader):
+    def evaluate(self, epoch, valid_loader):
         device = self.args.device
         encoder, recognizer, vocabulary = self.encoder, self.recognizer, self.vocabulary
 
@@ -128,15 +132,20 @@ class System:
             input_lengths = input_lengths.to(device)
             target_lengths = target_lengths.to(device)
 
+            input_lengths = encoder.subsampled_lengths(input_lengths)
+
             outputs = encoder(inputs)
-            loss = recognizer(outputs, targets)
+            loss = recognizer(outputs, targets, input_lengths, target_lengths)
 
             valid_loss += loss.item()
 
             if i == 0:
                 for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, outputs, input_lengths):
                     seq = recognizer.log_probs(seq)[:hyp_len]
-                    hyp = vocabulary.decode(ctc_beam_search_decode_logits(seq)[0][0])
+                    print('greedy', seq.argmax(dim=-1).tolist())
+                    decoded = ctc_beam_search_decode_logits(seq)
+                    print(decoded)
+                    hyp = vocabulary.decode(decoded[0][0])
                     ref = vocabulary.decode(ref[:ref_len])
                     print('hyp', hyp)
                     print('ref', ref)
@@ -152,7 +161,7 @@ if __name__ == '__main__':
     train_loader = torch.utils.data.DataLoader(
         train_set,
         collate_fn=collate,
-        batch_size=24,
+        batch_size=16,
         shuffle=True,
         num_workers=32,
         drop_last=True
@@ -171,11 +180,15 @@ if __name__ == '__main__':
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
 
+    if args.eval:
+        system.evaluate(0, valid_loader)
+        sys.exit(0)
+
     best_valid_loss = float('inf')
     for epoch in range(args.num_epochs):
-        system.train(train_loader)
+        system.train(epoch, train_loader)
 
-        valid_loss = system.evaluate(valid_loader)
+        valid_loss = system.evaluate(epoch, valid_loader)
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             print('saving model', args.save)

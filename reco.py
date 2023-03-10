@@ -10,8 +10,15 @@ class Encoder(nn.Module):
         super().__init__()
         self.dropout = nn.Dropout(0.2)
         self.subsample = nn.Conv1d(input_dim, subsample_dim, 5, stride=4, padding=1)
-        self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True)
-        #self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True, num_layers=1, dropout=0.2)
+        #self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True)
+        self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True, num_layers=3, dropout=0.2)
+
+    def subsampled_lengths(self, input_lengths):
+        # https://github.com/vdumoulin/conv_arithmetic
+        p, k, s = self.subsample.padding[0], self.subsample.kernel_size[0], self.subsample.stride[0]
+        o = input_lengths + 2 * p - k
+        o = torch.floor(o / s + 1)
+        return o.int()
 
     def forward(self, inputs):
         x = inputs
@@ -79,7 +86,6 @@ if __name__ == '__main__':
     encoder = Encoder()
     reco = Recognizer()
     vocabulary = Vocabulary()
-    x = torch.randn(1, 13, 320)
-    logits = encoder(x)
-    print(logits.shape)
-    print(reco(logits, vocabulary.encode("hello world")[None,:]))
+    x = torch.randn(1, 13, 320).mT
+    x = encoder(x)
+    print(x.shape)
