@@ -1,0 +1,5 @@
+LibriSpeech/
+,*
+*.pt
+__pycache__/
+*.tar.gz
