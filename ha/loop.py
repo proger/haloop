@@ -22,7 +22,7 @@ def print(*args, flush=False, **kwargs):
 
 
 class LibriSpeech(torch.utils.data.Dataset):
-    def __init__(self, url='train-clean-360'):
+    def __init__(self, url='train-clean-100'):
         super().__init__()
         self.librispeech = torchaudio.datasets.LIBRISPEECH('.', url=url, download=True)
 
@@ -169,10 +169,11 @@ def main():
     parser.add_argument('--log-interval', type=int, default=100)
     parser.add_argument('--num-epochs', type=int, default=30)
     parser.add_argument('--device', type=str, default='cuda:1')
+    parser.add_argument('--data', type=str, default='train-clean-100')
     parser.add_argument('--eval', action='store_true', help="Evaluate and exit")
     args = parser.parse_args()
 
-    train_set = LibriSpeech()
+    train_set = LibriSpeech(url=args.data)
     train_loader = torch.utils.data.DataLoader(
         train_set,
         collate_fn=collate,
