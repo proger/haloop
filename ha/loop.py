@@ -11,8 +11,8 @@ import torch.utils.data
 import torchaudio
 from kaldialign import edit_distance
 
-from beam import ctc_beam_search_decode_logits
-from model import Encoder, Recognizer, Vocabulary
+from .beam import ctc_beam_search_decode_logits
+from .model import Encoder, Recognizer, Vocabulary
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--init', type=Path)
@@ -156,7 +156,7 @@ class System:
         return valid_loss / i
 
 
-if __name__ == '__main__':
+def main():
     train_set = LibriSpeech()
     train_loader = torch.utils.data.DataLoader(
         train_set,
@@ -194,3 +194,6 @@ if __name__ == '__main__':
             print('saving model', args.save)
             torch.save(system.state_dict(), args.save)
 
+
+if __name__ == '__main__':
+    main()
