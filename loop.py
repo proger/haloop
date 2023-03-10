@@ -12,7 +12,7 @@ import torchaudio
 from kaldialign import edit_distance
 
 from beam import ctc_beam_search_decode_logits
-from reco import Encoder, Recognizer, Vocabulary
+from model import Encoder, Recognizer, Vocabulary
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--init', type=Path)
