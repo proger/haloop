@@ -5,6 +5,7 @@ import time
 from itertools import chain
 from pathlib import Path
 
+from rich.console import Console
 import torch
 import torch.nn as nn
 import torch.utils.data
@@ -13,6 +14,11 @@ from kaldialign import edit_distance
 
 from .beam import ctc_beam_search_decode_logits
 from .model import Encoder, Recognizer, Vocabulary
+
+
+console = Console()
+def print(*args, flush=False, **kwargs):
+    console.log(*args, **kwargs)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--init', type=Path)
