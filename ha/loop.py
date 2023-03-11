@@ -21,6 +21,29 @@ def print(*args, flush=False, **kwargs):
     console.log(*args, **kwargs)
 
 
+def make_frames(wav):
+    frames = torchaudio.compliance.kaldi.mfcc(wav)
+
+    # frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
+    # frames += 8.
+    # frames /= 4.
+    return frames
+
+
+class Directory(torch.utils.data.Dataset):
+    def __init__(self, path: Path):
+        super().__init__()
+        self.files = list(path.glob("*.wav"))
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, index):
+        wav, sr = torchaudio.load(self.files[index])
+        assert sr == 16000
+        return make_frames(wav), "the quick brown fox jumps over the lazy dog"
+
+
 class LibriSpeech(torch.utils.data.Dataset):
     def __init__(self, url='train-clean-100'):
         super().__init__()
@@ -31,15 +54,22 @@ class LibriSpeech(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         wav, sr, text, speaker_id, chapter_id, utterance_id = self.librispeech[index]
-        frames = torchaudio.compliance.kaldi.mfcc(wav)
+        return make_frames(wav), text
 
-        # frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
-        # frames += 8.
-        # frames /= 4.
 
-        return frames, text
+def concat_datasets(s):
+    if not s:
+        return []
+    parts = s.split(',')
+    paths = [Path(part) for part in parts]
+    return torch.utils.data.ConcatDataset(
+        Directory(path) if path.exists() else LibriSpeech(part)
+        for path, part in zip(paths, parts)
+    )
+
 
 vocabulary = Vocabulary()
+
 
 def collate(batch):
     input_lengths = torch.tensor([len(b[0]) for b in batch])
@@ -158,8 +188,9 @@ class System:
 
                     lers.append(dist['ler'])
 
-        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / i:.3f} sample ler: {sum(lers) / len(lers)}', flush=True)
-        return valid_loss / i
+        count = i + 1
+        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} sample ler: {sum(lers) / len(lers)}', flush=True)
+        return valid_loss / count
 
 
 def main():
@@ -169,24 +200,17 @@ def main():
     parser.add_argument('--log-interval', type=int, default=100)
     parser.add_argument('--num-epochs', type=int, default=30)
     parser.add_argument('--device', type=str, default='cuda:1')
-    parser.add_argument('--data', type=str, default='train-clean-100')
     parser.add_argument('--batch-size', type=int, default=16)
     parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
-    parser.add_argument('--eval', action='store_true', help="Evaluate and exit")
+    parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
+    parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
+    parser.add_argument('--encoder', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
     args = parser.parse_args()
 
-    train_set = torch.utils.data.ConcatDataset(LibriSpeech(url=data) for data in args.data.split(','))
-    train_loader = torch.utils.data.DataLoader(
-        train_set,
-        collate_fn=collate,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=32,
-        drop_last=True
-    )
-    valid_set = LibriSpeech('dev-clean')
+    print(torch.cuda.get_device_properties(args.device))
+
     valid_loader = torch.utils.data.DataLoader(
-        valid_set,
+        concat_datasets(args.eval),
         collate_fn=collate,
         batch_size=16,
         shuffle=False,
@@ -198,20 +222,27 @@ def main():
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
 
-    if args.eval:
-        system.evaluate(0, valid_loader)
-        sys.exit(0)
+    if args.train:
+        train_loader = torch.utils.data.DataLoader(
+            concat_datasets(args.train),
+            collate_fn=collate,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=32,
+            drop_last=True
+        )
 
-    best_valid_loss = float('inf')
-    for epoch in range(args.num_epochs):
-        system.train(epoch, train_loader)
+        best_valid_loss = float('inf')
+        for epoch in range(args.num_epochs):
+            system.train(epoch, train_loader)
 
-        valid_loss = system.evaluate(epoch, valid_loader)
-        if valid_loss < best_valid_loss:
-            best_valid_loss = valid_loss
-            print('saving model', args.save)
-            torch.save(system.state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
+            valid_loss = system.evaluate(epoch, valid_loader)
+            if valid_loss < best_valid_loss:
+                best_valid_loss = valid_loss
+                print('saving model', args.save)
+                torch.save(system.state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
 
+    system.evaluate(-100, valid_loader)
 
 if __name__ == '__main__':
     main()
