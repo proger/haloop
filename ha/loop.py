@@ -80,8 +80,9 @@ def collate(batch):
     return inputs, targets, input_lengths, target_lengths
 
 
-class System:
+class System(nn.Module):
     def __init__(self, args):
+        super().__init__()
         self.args = args
         self.encoder = Encoder().to(args.device)
         self.recognizer = Recognizer().to(args.device)
@@ -103,7 +104,7 @@ class System:
             'optimizer': self.optimizer.state_dict(),
         } | extra
 
-    def train(self, epoch, train_loader):
+    def train_one_epoch(self, epoch, train_loader):
         args, device = self.args, self.args.device
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
 
@@ -218,6 +219,7 @@ def main():
     )
 
     system = System(args)
+    system = torch.compile(system)
     if args.init:
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
@@ -234,7 +236,7 @@ def main():
 
         best_valid_loss = float('inf')
         for epoch in range(args.num_epochs):
-            system.train(epoch, train_loader)
+            system.train_one_epoch(epoch, train_loader)
 
             valid_loss = system.evaluate(epoch, valid_loader)
             if valid_loss < best_valid_loss:
