@@ -26,6 +26,9 @@ def add_stars_to_targets(
     star_log_probs[:, V] = complete_star_log_probs.squeeze() + penalty
     star_log_probs[:, V+1:] = complete_star_log_probs.logaddexp(log_probs[:, 1:]) + penalty
 
+    lse = star_log_probs.logsumexp(dim=1, keepdim=True)
+    star_log_probs -= lse # renormalize
+
     # Make a new target string of size 2*T + 1 where each symbol t is preceded by <star>\t.
     # The last symbol is <star>.
 
@@ -51,5 +54,5 @@ if __name__ == '__main__':
     print(star_logits.T, star_targets)
     lse = star_logits.T.logsumexp(dim=0, keepdim=True)
     print(lse)
-    print(star_logits.T - lse)
-    print((star_logits.T - lse).logsumexp(dim=0, keepdim=True))
+    #print(star_logits.T - lse)
+    print((star_logits.T - lse).logsumexp(dim=0, keepdim=True)) # must be zeros
