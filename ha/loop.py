@@ -55,7 +55,7 @@ class System:
         self.args = args
         self.encoder = Encoder().to(args.device)
         self.recognizer = Recognizer().to(args.device)
-        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()), lr=3e-4)
+        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()), lr=args.lr)
         self.scaler = torch.cuda.amp.GradScaler()
         self.vocabulary = Vocabulary()
 
@@ -170,14 +170,16 @@ def main():
     parser.add_argument('--num-epochs', type=int, default=30)
     parser.add_argument('--device', type=str, default='cuda:1')
     parser.add_argument('--data', type=str, default='train-clean-100')
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
     parser.add_argument('--eval', action='store_true', help="Evaluate and exit")
     args = parser.parse_args()
 
-    train_set = LibriSpeech(url=args.data)
+    train_set = torch.utils.data.ConcatDataset(LibriSpeech(url=data) for data in args.data.split(','))
     train_loader = torch.utils.data.DataLoader(
         train_set,
         collate_fn=collate,
-        batch_size=16,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=32,
         drop_last=True
