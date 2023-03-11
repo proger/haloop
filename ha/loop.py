@@ -206,6 +206,7 @@ def main():
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
     parser.add_argument('--encoder', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
+    parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     args = parser.parse_args()
 
     print(torch.cuda.get_device_properties(args.device))
@@ -219,10 +220,13 @@ def main():
     )
 
     system = System(args)
-    system = torch.compile(system)
+
     if args.init:
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
+
+    if args.compile:
+        system = torch.compile(system)
 
     if args.train:
         train_loader = torch.utils.data.DataLoader(
