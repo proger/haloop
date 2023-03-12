@@ -1,10 +1,15 @@
 import torch
 
 
+def logsubexp(b, a):
+    return b + torch.log1p(-torch.exp(a - b))
+
+
+
 def add_stars_to_targets(
     log_probs, # (N, T, V)
     targets, # (N, T)
-    penalty=-5,
+    penalty=-10,
 ):
     """
     For a label sequence A B C, produce a regex-like sequence [^A]+ A [^B]+ B [^C]+ C .*
@@ -23,18 +28,18 @@ def add_stars_to_targets(
     # For each vocabulary entry t except a blank (0), at position V+t,
     # make a new symbol <star>\t that has a probability of a sum (logadd) of all other symbols except t.
 
-    complete_star_log_probs = -log_probs[:, :, 1:].logsumexp(dim=-1, keepdim=True)
+    complete_star_log_probs = log_probs[:, :, 1:].logsumexp(dim=-1, keepdim=True)
 
     allstar_log_probs = complete_star_log_probs + penalty
-    starsub_log_probs = complete_star_log_probs.logaddexp(log_probs[:, :, 1:]) + penalty
+    starsub_log_probs = logsubexp(complete_star_log_probs, log_probs[:, :, 1:]) + penalty
     star_log_probs = torch.cat([
         log_probs,
         allstar_log_probs,
         starsub_log_probs
     ], dim=-1)
 
-    lse = star_log_probs.logsumexp(dim=-1, keepdim=True)
-    star_log_probs = star_log_probs - lse # renormalize
+    # lse = star_log_probs.logsumexp(dim=-1, keepdim=True)
+    # star_log_probs = star_log_probs - lse # renormalize
 
     # Make a new target string of size 2*T + 1 where each symbol t is preceded by <star>\t.
     # The last symbol is <star>.
