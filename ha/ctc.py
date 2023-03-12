@@ -25,12 +25,17 @@ def ctc_forward_score1(
 
     for t in range(1, T):
         for s in range(1, len(_t_a_r_g_e_t_s_)):
-            log_alpha_bar = log_alpha[t-1, s].logaddexp(log_alpha[t-1, s-1])
-            if _t_a_r_g_e_t_s_[s] == 0 or _t_a_r_g_e_t_s_[s-2] == _t_a_r_g_e_t_s_[s]:
-                pass
+            self_loop = log_alpha[t-1, s]
+            prev_symbol = log_alpha[t-1, s-1]
+            skip = log_alpha[t-1, s-2]
+
+            if _t_a_r_g_e_t_s_[s] == blank or _t_a_r_g_e_t_s_[s-2] == _t_a_r_g_e_t_s_[s]:
+                # transitions into blank or a copy of the same symbol
+                transitions = self_loop.logaddexp(prev_symbol)
             else:
-                log_alpha_bar = log_alpha_bar.logaddexp(log_alpha[t-1, s-2])
-            log_alpha[t, s] = log_alpha_bar + emissions[t, _t_a_r_g_e_t_s_[s]]
+                transitions = self_loop.logaddexp(prev_symbol).logaddexp(skip)
+
+            log_alpha[t, s] = transitions + emissions[t, _t_a_r_g_e_t_s_[s]]
 
     return -log_alpha[T-1, -1].logaddexp(log_alpha[T-1, -2])
 
