@@ -154,7 +154,11 @@ class System(nn.Module):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    class Formatter(argparse.ArgumentDefaultsHelpFormatter,
+                    argparse.MetavarTypeHelpFormatter):
+        pass
+
+    parser = argparse.ArgumentParser(formatter_class=Formatter)
     parser.add_argument('--init', type=Path)
     parser.add_argument('--save', type=Path, default='ckpt.pt')
     parser.add_argument('--log-interval', type=int, default=100)
@@ -164,7 +168,7 @@ def main():
     parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
-    parser.add_argument('--encoder', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
+    parser.add_argument('--encoder', type=str, default='uni', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
     parser.add_argument('--eval-p-drop-word', type=float, default=0.0, help="Probability of dropping a word during evaluation")
     parser.add_argument('--train-p-drop-word', type=float, default=0.0, help="Probability of dropping a word during training")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")

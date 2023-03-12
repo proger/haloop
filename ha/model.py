@@ -10,8 +10,8 @@ class Encoder(nn.Module):
         super().__init__()
         self.dropout = nn.Dropout(0.2)
         self.subsample = nn.Conv1d(input_dim, subsample_dim, 5, stride=4, padding=1)
-        self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True)
-        #self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True, num_layers=3, dropout=0.2)
+        #self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True)
+        self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True, num_layers=3, dropout=0.2)
 
     def subsampled_lengths(self, input_lengths):
         # https://github.com/vdumoulin/conv_arithmetic
