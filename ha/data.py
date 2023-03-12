@@ -40,13 +40,19 @@ class LibriSpeech(torch.utils.data.Dataset):
         return make_frames(wav), text
 
 
+def make_dataset(s):
+    match s.split(':', maxsplit=1):
+        case [subset]:
+            return LibriSpeech(subset)
+
+
 def concat_datasets(s):
     if not s:
         return []
     parts = s.split(',')
     paths = [Path(part) for part in parts]
     return torch.utils.data.ConcatDataset(
-        Directory(path) if path.exists() else LibriSpeech(part)
+        Directory(path) if path.exists() else make_dataset(str(part))
         for path, part in zip(paths, parts)
     )
 
