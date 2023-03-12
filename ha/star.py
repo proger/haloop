@@ -39,7 +39,7 @@ def add_stars_to_targets(
     # Make a new target string of size 2*T + 1 where each symbol t is preceded by <star>\t.
     # The last symbol is <star>.
 
-    star_targets = torch.stack([targets, V + targets], dim=1).mT.reshape(N, -1)
+    star_targets = torch.stack([V + targets, targets], dim=1).mT.reshape(N, -1)
     star_targets = torch.cat([star_targets, targets.new(N, 1).fill_(V)], dim=-1)
 
     return star_log_probs, star_targets
