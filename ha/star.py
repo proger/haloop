@@ -2,8 +2,8 @@ import torch
 
 
 def add_stars_to_targets(
-    log_probs, # (T, V)
-    targets, # (T)
+    log_probs, # (N, T, V)
+    targets, # (N, T)
     penalty=-5,
 ):
     """
@@ -13,28 +13,28 @@ def add_stars_to_targets(
                Vineel Pratap, Awni Hannun, Gabriel Synnaeve, Ronan Collobert
                https://arxiv.org/abs/2201.12208
     """
-    T, V = log_probs.shape
+    N, T, V = log_probs.shape
 
     # Make one symbol <star> that has a probability of a sum of all symbols except a blank at position V.
     # For each vocabulary entry t except a blank (0), at position V+t,
     # make a new symbol <star>\t that has a probability of a sum (logadd) of all other symbols except t.
 
-    complete_star_log_probs = -log_probs[:, 1:].logsumexp(dim=1, keepdim=True)
+    complete_star_log_probs = -log_probs[:, :, 1:].logsumexp(dim=-1, keepdim=True)
     
-    star_log_probs = log_probs.new_zeros(T, V + V)
-    star_log_probs[:, :V] = log_probs
-    star_log_probs[:, V] = complete_star_log_probs.squeeze() + penalty
-    star_log_probs[:, V+1:] = complete_star_log_probs.logaddexp(log_probs[:, 1:]) + penalty
+    star_log_probs = log_probs.new_zeros(N, T, V + V)
+    star_log_probs[:, :, :V] = log_probs
+    star_log_probs[:, :, V] = complete_star_log_probs.squeeze() + penalty
+    star_log_probs[:, :, V+1:] = complete_star_log_probs.logaddexp(log_probs[:, :, 1:]) + penalty
 
-    lse = star_log_probs.logsumexp(dim=1, keepdim=True)
+    lse = star_log_probs.logsumexp(dim=-1, keepdim=True)
     star_log_probs -= lse # renormalize
 
     # Make a new target string of size 2*T + 1 where each symbol t is preceded by <star>\t.
     # The last symbol is <star>.
 
-    star_targets = (V + targets).repeat_interleave(2)
-    star_targets[::2] = targets    
-    star_targets = torch.cat([star_targets, star_targets.new([V])])
+    star_targets = (V + targets).repeat_interleave(2, 1)
+    star_targets[:, ::2] = targets
+    star_targets = torch.cat([star_targets, star_targets.new([V])[None,:]], dim=-1)
 
     return star_log_probs, star_targets
 
@@ -49,8 +49,14 @@ if __name__ == '__main__':
     print(logits.T)
     print(logits.T.logsumexp(dim=0, keepdim=True))
     
+    logits = logits[None, :] # (N, T, V)
+    targets = targets[None, :] # (N, T)
+
     star_logits, star_targets = add_stars_to_targets(logits, targets)
-    
+
+    star_logits = star_logits.squeeze(0) # (T, V+V)
+    star_targets = star_targets.squeeze(0) # (2*T+1)
+
     print(star_logits.T, star_targets)
     lse = star_logits.T.logsumexp(dim=0, keepdim=True)
     print(lse)
