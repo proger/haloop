@@ -8,6 +8,10 @@ def add_stars_to_targets(
 ):
     """
     For a label sequence A B C, produce a regex-like sequence [^A]+ A [^B]+ B [^C]+ C .*
+
+    Assumes blank has position 0.
+
+    Output targets are of size T' = 2*T + 1.
     
     [Pratap22] Star Temporal Classification: Sequence Classification with Partially Labeled Data
                Vineel Pratap, Awni Hannun, Gabriel Synnaeve, Ronan Collobert
@@ -20,21 +24,23 @@ def add_stars_to_targets(
     # make a new symbol <star>\t that has a probability of a sum (logadd) of all other symbols except t.
 
     complete_star_log_probs = -log_probs[:, :, 1:].logsumexp(dim=-1, keepdim=True)
-    
-    star_log_probs = log_probs.new_zeros(N, T, V + V)
-    star_log_probs[:, :, :V] = log_probs
-    star_log_probs[:, :, V] = complete_star_log_probs.squeeze() + penalty
-    star_log_probs[:, :, V+1:] = complete_star_log_probs.logaddexp(log_probs[:, :, 1:]) + penalty
+
+    allstar_log_probs = complete_star_log_probs + penalty
+    starsub_log_probs = complete_star_log_probs.logaddexp(log_probs[:, :, 1:]) + penalty
+    star_log_probs = torch.cat([
+        log_probs,
+        allstar_log_probs,
+        starsub_log_probs
+    ], dim=-1)
 
     lse = star_log_probs.logsumexp(dim=-1, keepdim=True)
-    star_log_probs -= lse # renormalize
+    star_log_probs = star_log_probs - lse # renormalize
 
     # Make a new target string of size 2*T + 1 where each symbol t is preceded by <star>\t.
     # The last symbol is <star>.
 
-    star_targets = (V + targets).repeat_interleave(2, 1)
-    star_targets[:, ::2] = targets
-    star_targets = torch.cat([star_targets, star_targets.new([V])[None,:]], dim=-1)
+    star_targets = torch.stack([targets, V + targets], dim=1).mT.reshape(N, -1)
+    star_targets = torch.cat([star_targets, targets.new(N, 1).fill_(V)], dim=-1)
 
     return star_log_probs, star_targets
 
@@ -62,3 +68,9 @@ if __name__ == '__main__':
     print(lse)
     #print(star_logits.T - lse)
     print((star_logits.T - lse).logsumexp(dim=0, keepdim=True)) # must be zeros
+
+    # test batching:
+
+    logits = logits.repeat(3, 1, 1) # (N, T, V)
+    targets = targets.repeat(3, 1) # (N, T)
+    add_stars_to_targets(logits, targets)
