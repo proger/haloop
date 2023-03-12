@@ -190,7 +190,8 @@ class System(nn.Module):
                     lers.append(dist['ler'])
 
         count = i + 1
-        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} sample ler: {sum(lers) / len(lers)}', flush=True)
+        ler = round(sum(lers) / len(lers), 3)
+        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} sample ler: {ler:.3f}', flush=True)
         return valid_loss / count
 
 
