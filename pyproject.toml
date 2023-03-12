@@ -23,8 +23,11 @@ classifiers = [
 ]
 dependencies = [
   "click",
+  "g2p-en",
   "kaldialign",
+  "rich",
   "torch",
+  "torchaudio",
 ]
 dynamic = ["version"]
 
