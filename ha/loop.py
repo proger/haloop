@@ -34,7 +34,7 @@ class Collator:
         inputs = torch.nn.utils.rnn.pad_sequence([b[0] for b in batch], batch_first=True)
         targets = [vocabulary.encode(self.drop_words(b[1])) for b in batch]
         target_lengths = torch.tensor([len(t) for t in targets])
-        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=-1)
+        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
         return inputs, targets, input_lengths, target_lengths
 
 

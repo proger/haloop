@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 from g2p_en import G2p
 
+from .ctc import ctc_forward_score3
+
 
 class Encoder(nn.Module):
     def __init__(self, input_dim=13, subsample_dim=128, hidden_dim=1024):
@@ -78,8 +80,12 @@ class Recognizer(nn.Module):
 
         with torch.autocast(device_type='cuda', dtype=torch.float32):
             logits = self.log_probs(features).to(torch.float32)
+
             logits = logits.permute(1, 0, 2) # T, N, C
-            return self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+            newl = ctc_forward_score3(logits, targets, input_lengths, target_lengths).mean(dim=-1)
+            #orig = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+            #print('orig', orig, 'newl', newl)
+            return newl
 
 
 if __name__ == '__main__':
