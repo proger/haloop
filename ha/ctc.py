@@ -131,37 +131,33 @@ def ctc_forward_score3(
     T_last = emission_lengths - 1
     S_last = 2*target_lengths + 1 - 1
 
-    log_alpha = emissions.new_full((T, N, S_), float('-inf'))
+    #log_alpha = emissions.new_full((T, N, S_), float('-inf'))
+    log_alpha = emissions.new_full((T, N, S_), torch.finfo(torch.float).min)
 
     log_alpha[0, :, :2] = emissions[0, :].gather(-1, _t_a_r_g_e_t_s_[:, :2])
 
     # first symbol at t=1 comes from a self loop or a leading blank
-    first_transitions = log_alpha[0, :, 0].logaddexp(log_alpha[0, :, 1])
+    leading_blank = log_alpha[0, :, 0].clone()
+    self_loop = log_alpha[0, :, 1].clone()
+    first_transitions = leading_blank.logaddexp(self_loop)
     log_alpha[1, :, 1] = first_transitions + emissions[1, :].gather(-1, _t_a_r_g_e_t_s_[:, 1:2]).squeeze()
 
     blanks = _t_a_r_g_e_t_s_[:, 2:] == blank
     same_symbols = _t_a_r_g_e_t_s_[:, 2:] == _t_a_r_g_e_t_s_[:, :-2]
 
-    for t in range(1, T):
-        self_loop = log_alpha[t-1, :, 2:]
-        prev_symbol = log_alpha[t-1, :, 1:-1]
-        skip = log_alpha[t-1, :, :-2]
+    for t in range(2, T):
+        self_loop = log_alpha[t-1, :, 2:].clone()
+        prev_symbol = log_alpha[t-1, :, 1:-1].clone()
+        skip = log_alpha[t-1, :, :-2].clone()
 
         basic_transitions = self_loop.logaddexp(prev_symbol)
+        basic_and_skip = basic_transitions.logaddexp(skip)
 
         # transition into blank: no skips across blanks
-        transitions = torch.where(
-            blanks,
-            basic_transitions,
-            basic_transitions.logaddexp(skip)
-        )
+        transitions = torch.where(blanks, basic_transitions, basic_and_skip)
 
         # transition from the same symbol: must go through a blank (no skips)
-        transitions = torch.where(
-            same_symbols,
-            basic_transitions,
-            transitions
-        )
+        transitions = torch.where(same_symbols, basic_transitions, transitions)
 
         if t > 1:
             # first symbol past t=1 only comes from a self loop
@@ -170,9 +166,10 @@ def ctc_forward_score3(
 
         log_alpha[t, :, 2:] = transitions + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 2:])
 
-    last_timestep = log_alpha[T_last, torch.arange(N), :]
-    last_blank  = last_timestep[torch.arange(N), S_last]
-    last_symbol = last_timestep[torch.arange(N), S_last-1]
+    Ns = torch.arange(N)
+    last_timestep = log_alpha[T_last, Ns, :]
+    last_blank  = last_timestep[Ns, S_last]
+    last_symbol = last_timestep[Ns, S_last-1]
 
     return -last_blank.logaddexp(last_symbol)
 
