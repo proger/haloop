@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 from kaldialign import edit_distance, align
+import wandb
 
 from .data import concat_datasets
 from .beam import ctc_beam_search_decode_logits
@@ -101,6 +102,7 @@ class System(nn.Module):
                 train_loss = train_loss / args.log_interval
                 t1 = time.time()
                 print(f'[{epoch + 1}, {i + 1:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f}', flush=True)
+                wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm})
                 t0 = t1
 
     @torch.inference_mode()
@@ -150,6 +152,7 @@ class System(nn.Module):
         count = i + 1
         ler = round(sum(lers) / len(lers), 3)
         print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} sample ler: {ler:.3f}', flush=True)
+        wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler})
         return valid_loss / count
 
 
@@ -173,6 +176,8 @@ def main():
     parser.add_argument('--train-p-drop-word', type=float, default=0.0, help="Probability of dropping a word during training")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     args = parser.parse_args()
+
+    wandb.init(project='ha', config=args)
 
     torch.manual_seed(3407)
 
