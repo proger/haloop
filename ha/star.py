@@ -67,7 +67,7 @@ def star_ctc_forward_score(
     targets, # (N, S,), such that T > S
     emission_lengths, # (N,)
     target_lengths, # (N,)
-    star_penalty=-1111,
+    star_penalty=-100,
 ):
     """
     CTC forward score with stars for a batch of sequences.
@@ -90,8 +90,8 @@ def star_ctc_forward_score(
     assert emissions.shape[-1] == V
     targets = intersperse_blanks(targets, blank=blank)  # (N, 4*S+3)
  
-    #void = torch.finfo(torch.float).min # float('-inf')
-    void = float('-inf')
+    void = torch.finfo(torch.float).min # float('-inf')
+    #void = float('-inf')
 
     S_ = targets.shape[1] # S_ = 4*S + 3
 
@@ -107,8 +107,9 @@ def star_ctc_forward_score(
 
     log_alpha[:, :, -s_pad_bottom] = -7007.7007 # toot-toot
 
-    blanks = torch.arange(S_) % 2 == 0
-    stars = torch.arange(S_) % 4 == 1
+    Ss_ = torch.arange(S_, device=emissions.device) # (S_,)
+    blanks = Ss_ % 2 == 0
+    stars = Ss_ % 4 == 1
     same_label_as_prev = (targets[:, 4+3::4] == targets[:, 3:-4:4]).repeat_interleave(4, dim=-1)
     same_label_as_prev = torch.cat([same_label_as_prev.new_zeros(N, 4), same_label_as_prev, same_label_as_prev.new_zeros(N, 3)], dim=-1)
 
@@ -142,10 +143,11 @@ def star_ctc_forward_score(
         log_alpha[t, :, s:-1] = transitions + emissions[t-1].gather(-1, targets)
 
         #print(log_alpha[:, 1, :].T)
+        #import time; time.sleep(0.5)
 
     #print('S_last', S_last, log_alpha.shape, sep='\n')
 
-    Ns = torch.arange(N)
+    Ns = torch.arange(N, device=emissions.device)
     last_timestep = log_alpha[T_last, Ns, :]
     last_blank  = last_timestep[Ns, S_last]
     last_star = last_timestep[Ns, S_last-1]
