@@ -67,6 +67,7 @@ def star_ctc_forward_score(
     targets, # (N, S,), such that T > S
     emission_lengths, # (N,)
     target_lengths, # (N,)
+    star_penalty=-1111,
 ):
     """
     CTC forward score with stars for a batch of sequences.
@@ -88,14 +89,11 @@ def star_ctc_forward_score(
     V = 2*C
     assert emissions.shape[-1] == V
     targets = intersperse_blanks(targets, blank=blank)  # (N, 4*S+3)
-
-    S_ = targets.shape[1] # S_ = 4*S + 3
  
-    T_last = emission_lengths - 1
-    S_last = 4*target_lengths + 3 - 1
-
     #void = torch.finfo(torch.float).min # float('-inf')
     void = float('-inf')
+
+    S_ = targets.shape[1] # S_ = 4*S + 3
 
     s_pad_top = 4 # pad with 4 states at the top of a log_alpha trellis
     s_pad_bottom = 1 # pad with 1 state at the bottom of a log_alpha trellis
@@ -103,6 +101,11 @@ def star_ctc_forward_score(
     log_alpha = emissions.new_full((T+t_pad, N, S_+s_pad_top+s_pad_bottom), void)
     log_alpha[0, :, :s_pad_top] = 0.
     s = 4 # start at the 4th state
+
+    T_last = t_pad + emission_lengths - 1
+    S_last = s_pad_top + 4*target_lengths + 3 - 1
+
+    log_alpha[:, :, -s_pad_bottom] = -7007.7007 # toot-toot
 
     blanks = torch.arange(S_) % 2 == 0
     stars = torch.arange(S_) % 4 == 1
@@ -127,7 +130,7 @@ def star_ctc_forward_score(
         from_prev_or_self = from_prev.logaddexp(from_self)
         from_prev_or_star = from_prev.logaddexp(from_star)
         into_blank = from_prev_or_self
-        into_star = from_prev_or_self.logaddexp(from_star_blank)
+        into_star = from_prev_or_self.logaddexp(from_star_blank) + star_penalty
         into_different_label = from_prev_or_star.logaddexp(from_prev_label)
         into_same_label = from_prev_or_star
 
@@ -138,14 +141,16 @@ def star_ctc_forward_score(
         # emissions are shifted by 1
         log_alpha[t, :, s:-1] = transitions + emissions[t-1].gather(-1, targets)
 
-        print(log_alpha[:, 0, :].T)
+        #print(log_alpha[:, 1, :].T)
+
+    #print('S_last', S_last, log_alpha.shape, sep='\n')
 
     Ns = torch.arange(N)
     last_timestep = log_alpha[T_last, Ns, :]
-    last_blank  = last_timestep[Ns, s+S_last]
-    last_star = last_timestep[Ns, s+S_last-1]
-    last_blank_1  = last_timestep[Ns, s+S_last-2]
-    last_symbol  = last_timestep[Ns, s+S_last-3]
+    last_blank  = last_timestep[Ns, S_last]
+    last_star = last_timestep[Ns, S_last-1]
+    last_blank_1  = last_timestep[Ns, S_last-2]
+    last_symbol  = last_timestep[Ns, S_last-3]
 
     return -last_blank.logaddexp(last_star).logaddexp(last_blank_1).logaddexp(last_symbol)
 
@@ -184,14 +189,14 @@ def test_intersperse():
 
 
 if __name__ == '__main__':
-    torch.set_printoptions(precision=4, sci_mode=False)
+    torch.set_printoptions(precision=4, sci_mode=False, linewidth=200)
 
     torch.manual_seed(2)
-    logits0 = torch.randn(5, 7).log_softmax(-1)
-    logits1 = torch.randn(5, 7).log_softmax(-1)
+    logits0 = torch.randn(10, 7).log_softmax(-1)
+    logits1 = torch.randn(10, 7).log_softmax(-1)
     targets0 = torch.LongTensor([1,2,3,3])
     targets1 = torch.LongTensor([1,2,3,4])
-    input_lengths = torch.LongTensor([5, 5])
+    input_lengths = torch.LongTensor([5, 10])
     target_lengths = torch.LongTensor([3, 4])
     logits = torch.stack([logits0, logits1], dim=1)
     print('logits.shape', logits.shape)
