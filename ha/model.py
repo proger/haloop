@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from g2p_en import G2p
 
 from .ctc import ctc_forward_score3
+from .star import star_ctc_forward_score
 
 
 class Encoder(nn.Module):
@@ -82,10 +83,11 @@ class Recognizer(nn.Module):
             logits = self.log_probs(features).to(torch.float32)
 
             logits = logits.permute(1, 0, 2) # T, N, C
-            newl = ctc_forward_score3(logits, targets, input_lengths, target_lengths).mean(dim=-1)
+            loss = star_ctc_forward_score(logits, targets, input_lengths, target_lengths).mean(dim=-1)
+            #loss = ctc_forward_score3(logits, targets, input_lengths, target_lengths).mean(dim=-1)
             #orig = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
-            #print('orig', orig, 'newl', newl)
-            return newl
+            #print('orig', orig, 'loss', loss)
+            return loss
 
 
 if __name__ == '__main__':
