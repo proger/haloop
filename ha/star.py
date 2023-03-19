@@ -67,7 +67,8 @@ def star_ctc_forward_score(
     targets, # (N, S,), such that T > S
     emission_lengths, # (N,)
     target_lengths, # (N,)
-    star_penalty=-100,
+    star_penalty=-1000,
+    animate=False
 ):
     """
     CTC forward score with stars for a batch of sequences.
@@ -89,9 +90,12 @@ def star_ctc_forward_score(
     V = 2*C
     assert emissions.shape[-1] == V
     targets = intersperse_blanks(targets, blank=blank)  # (N, 4*S+3)
- 
-    void = torch.finfo(torch.float).min # float('-inf')
-    #void = float('-inf')
+
+    if animate:
+        void = float('-inf') # animation looks nicer with -inf, but gradients are NaN
+    else:
+        void = torch.finfo(torch.float).min # float('-inf')
+
 
     S_ = targets.shape[1] # S_ = 4*S + 3
 
@@ -117,6 +121,7 @@ def star_ctc_forward_score(
         prev = log_alpha[t-1].clone()
 
         from_prev_label = prev[:, s-4:-5]
+        from_first_blank = prev[:, s-3:-4]
         from_star = prev[:, s-2:-3]
         from_star_blank = prev[:, s+1:]
         from_prev = prev[:, s-1:-2]
@@ -129,11 +134,11 @@ def star_ctc_forward_score(
         # into_same_label: any known label that is the same as the previous label
 
         from_prev_or_self = from_prev.logaddexp(from_self)
-        from_prev_or_star = from_prev.logaddexp(from_star)
+        from_first_blank_or_prev_or_star = from_first_blank.logaddexp(from_prev).logaddexp(from_star)
         into_blank = from_prev_or_self
         into_star = from_prev_or_self.logaddexp(from_star_blank) + star_penalty
-        into_different_label = from_prev_or_star.logaddexp(from_prev_label)
-        into_same_label = from_prev_or_star
+        into_different_label = from_first_blank_or_prev_or_star.logaddexp(from_prev_label)
+        into_same_label = from_first_blank_or_prev_or_star
 
         transitions = torch.where(blanks, into_blank,
                                   torch.where(stars, into_star,
@@ -142,8 +147,9 @@ def star_ctc_forward_score(
         # emissions are shifted by 1
         log_alpha[t, :, s:-1] = transitions + emissions[t-1].gather(-1, targets)
 
-        #print(log_alpha[:, 1, :].T)
-        #import time; time.sleep(0.5)
+        if animate:
+            print(log_alpha[:, 1, :].T)
+            import time; time.sleep(0.5)
 
     #print('S_last', S_last, log_alpha.shape, sep='\n')
 
@@ -206,7 +212,4 @@ if __name__ == '__main__':
 
     print(logits, targets)
 
-    print('star'     , star_ctc_forward_score(
-        logits, targets,
-        input_lengths,
-        target_lengths))
+    star_ctc_forward_score(logits, targets, input_lengths, target_lengths, star_penalty=-100, animate=True)
