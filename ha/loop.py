@@ -162,12 +162,12 @@ def main():
         pass
 
     parser = argparse.ArgumentParser(formatter_class=Formatter)
-    parser.add_argument('--init', type=Path)
-    parser.add_argument('--save', type=Path, default='ckpt.pt')
-    parser.add_argument('--log-interval', type=int, default=100)
-    parser.add_argument('--num-epochs', type=int, default=30)
-    parser.add_argument('--device', type=str, default='cuda:1')
-    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
+    parser.add_argument('--save', type=Path, default='ckpt.pt', help="Path to save checkpoint to")
+    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
+    parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
+    parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
+    parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
