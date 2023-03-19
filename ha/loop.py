@@ -181,7 +181,7 @@ def main():
 
     torch.manual_seed(3407)
 
-    print(torch.cuda.get_device_properties(args.device))
+    print('running on:', args.device, torch.cuda.get_device_properties(args.device))
 
     valid_loader = torch.utils.data.DataLoader(
         concat_datasets(args.eval),
