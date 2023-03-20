@@ -67,7 +67,7 @@ def star_ctc_forward_score(
     targets, # (N, S,), such that T > S
     emission_lengths, # (N,)
     target_lengths, # (N,)
-    star_penalty=-100,
+    star_penalty=-1,
     animate=False
 ):
     """
