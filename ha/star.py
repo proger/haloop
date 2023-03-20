@@ -8,7 +8,7 @@ def logsubexp(b, a):
 def intersperse_stars(
     log_probs, # (T, N, V)
     targets, # (N, S), such that S < T
-    penalty=-10,
+    penalty=0,
 ):
     """
     For a label sequence A B C, produce a regex-like sequence [^A]+ A [^B]+ B [^C]+ C .*
@@ -67,7 +67,7 @@ def star_ctc_forward_score(
     targets, # (N, S,), such that T > S
     emission_lengths, # (N,)
     target_lengths, # (N,)
-    star_penalty=-1000,
+    star_penalty=-100,
     animate=False
 ):
     """
