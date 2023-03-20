@@ -40,10 +40,30 @@ class LibriSpeech(torch.utils.data.Dataset):
         return make_frames(wav), text
 
 
+class WordDrop(torch.utils.data.Dataset):
+    def __init__(self, dataset, p_drop_words=0.4):
+        super().__init__()
+        self.dataset = dataset
+        self.p_drop_words = p_drop_words
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        frames, text = self.dataset[index]
+        generator = torch.Generator().manual_seed(index)
+        text = ' '.join(w for w in text.split(' ') if torch.rand(1, generator=generator) > self.p_drop_words)
+        return frames, text
+
+
 def make_dataset(s):
     match s.split(':', maxsplit=1):
         case [subset]:
             return LibriSpeech(subset)
+        case ['wdrop.4', subset]:
+            return WordDrop(LibriSpeech(subset), p_drop_words=0.4)
+        case ['wdrop.1', subset]:
+            return WordDrop(LibriSpeech(subset), p_drop_words=0.1)
 
 
 def concat_datasets(s):

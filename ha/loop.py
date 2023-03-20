@@ -24,16 +24,10 @@ vocabulary = Vocabulary()
 
 
 class Collator:
-    def __init__(self, p_drop_words=0.2):
-        self.p_drop_words = p_drop_words
-
-    def drop_words(self, words):
-        return ' '.join([w for w in words.split(' ') if torch.rand(1) > self.p_drop_words])
-
     def __call__(self, batch):
         input_lengths = torch.tensor([len(b[0]) for b in batch])
         inputs = torch.nn.utils.rnn.pad_sequence([b[0] for b in batch], batch_first=True)
-        targets = [vocabulary.encode(self.drop_words(b[1])) for b in batch]
+        targets = [vocabulary.encode(b[1]) for b in batch]
         target_lengths = torch.tensor([len(t) for t in targets])
         targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
         return inputs, targets, input_lengths, target_lengths
@@ -172,8 +166,6 @@ def main():
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
     parser.add_argument('--encoder', type=str, default='uni', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
-    parser.add_argument('--eval-p-drop-word', type=float, default=0.0, help="Probability of dropping a word during evaluation")
-    parser.add_argument('--train-p-drop-word', type=float, default=0.0, help="Probability of dropping a word during training")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     args = parser.parse_args()
 
@@ -185,7 +177,7 @@ def main():
 
     valid_loader = torch.utils.data.DataLoader(
         concat_datasets(args.eval),
-        collate_fn=Collator(p_drop_words=args.eval_p_drop_word),
+        collate_fn=Collator(),
         batch_size=16,
         shuffle=False,
         num_workers=32
@@ -198,12 +190,12 @@ def main():
         system.load_state_dict(checkpoint)
 
     if args.compile:
-        system = torch.compile(system)
+        system = torch.compile(system, options={'trace.graph_diagram': True})
 
     if args.train:
         train_loader = torch.utils.data.DataLoader(
             concat_datasets(args.train),
-            collate_fn=Collator(p_drop_words=args.train_p_drop_word),
+            collate_fn=Collator(),
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=32,
