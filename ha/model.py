@@ -61,7 +61,7 @@ class Vocabulary:
         return ['' if l == 0 else self.rdictionary[l-1] for l in labels]
 
 
-class Recognizer(nn.Module):
+class CTCRecognizer(nn.Module):
     def __init__(self, feat_dim=1024, vocab_size=55+1):
         super().__init__()
         self.ctc = nn.CTCLoss(blank=0)
@@ -81,18 +81,40 @@ class Recognizer(nn.Module):
 
         with torch.autocast(device_type='cuda', dtype=torch.float32):
             logits = self.log_probs(features).to(torch.float32)
+            logits = logits.permute(1, 0, 2) # T, N, C
+            return self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+
+
+class StarRecognizer(nn.Module):
+    def __init__(self, feat_dim=1024, vocab_size=55+1, star_penalty=-1):
+        super().__init__()
+        self.classifier = nn.Linear(feat_dim, vocab_size)
+        self.dropout = nn.Dropout(0.2)
+        self.star_penalty = star_penalty
+
+    def log_probs(self, features):
+        features = self.dropout(features)
+        features = self.classifier(features)
+        return features.log_softmax(dim=-1)
+
+    def forward(self, features, targets, input_lengths=None, target_lengths=None):
+        if input_lengths is None:
+            input_lengths = torch.full((features.shape[0],), features.shape[1], dtype=torch.long)
+        if target_lengths is None:
+            target_lengths = torch.full((features.shape[0],), len(targets), dtype=torch.long)
+
+        with torch.autocast(device_type='cuda', dtype=torch.float32):
+            logits = self.log_probs(features).to(torch.float32)
 
             logits = logits.permute(1, 0, 2) # T, N, C
-            loss = star_ctc_forward_score(logits, targets, input_lengths, target_lengths).mean(dim=-1)
-            #loss = ctc_forward_score3(logits, targets, input_lengths, target_lengths).mean(dim=-1)
-            #orig = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
-            #print('orig', orig, 'loss', loss)
+            loss = star_ctc_forward_score(logits, targets, input_lengths, target_lengths,
+                                          star_penalty=self.star_penalty).mean(dim=-1)
             return loss
 
 
 if __name__ == '__main__':
     encoder = Encoder()
-    reco = Recognizer()
+    reco = CTCRecognizer()
     vocabulary = Vocabulary()
     x = torch.randn(1, 13, 320).mT
     x = encoder(x)
