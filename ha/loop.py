@@ -39,7 +39,7 @@ class System(nn.Module):
         self.args = args
         self.encoder = Encoder().to(args.device)
         if args.star_penalty:
-            self.recognizer = StarRecognizer(star_penalty=self.star_penalty).to(args.device)
+            self.recognizer = StarRecognizer(star_penalty=args.star_penalty).to(args.device)
         else:
             self.recognizer = CTCRecognizer().to(args.device)
         self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()), lr=args.lr)
