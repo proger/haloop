@@ -149,7 +149,8 @@ class System(nn.Module):
         count = i + 1
         ler = round(sum(lers) / len(lers), 3)
         print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} sample ler: {ler:.3f}', flush=True)
-        wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler})
+        if wandb.run is not None:
+            wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler})
         return valid_loss / count
 
 
