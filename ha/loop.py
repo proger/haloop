@@ -173,8 +173,6 @@ def main():
     parser.add_argument('--star-penalty', type=float, default=0., help="Star penalty for Star CTC. If unset, train with regular CTC")
     args = parser.parse_args()
 
-    wandb.init(project='ha', config=args)
-
     print(args)
 
     torch.manual_seed(3407)
@@ -197,6 +195,8 @@ def main():
         system = torch.compile(system, options={'trace.graph_diagram': True})
 
     if args.train:
+        wandb.init(project='ha', config=args)
+
         train_loader = torch.utils.data.DataLoader(
             concat_datasets(args.train),
             collate_fn=Collator(),
