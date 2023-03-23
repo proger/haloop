@@ -38,7 +38,7 @@ class System(nn.Module):
         super().__init__()
         self.args = args
         self.encoder = Encoder().to(args.device)
-        if args.star_penalty:
+        if args.star_penalty is not None:
             self.recognizer = StarRecognizer(star_penalty=args.star_penalty).to(args.device)
         else:
             self.recognizer = CTCRecognizer().to(args.device)
@@ -181,7 +181,8 @@ def main():
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
     parser.add_argument('--encoder', type=str, default='uni', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
-    parser.add_argument('--star-penalty', type=float, default=0., help="Star penalty for Star CTC. If unset, train with regular CTC")
+    parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
+    parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     args = parser.parse_args()
 
     print(args)
@@ -193,7 +194,7 @@ def main():
         collate_fn=Collator(),
         batch_size=16,
         shuffle=False,
-        num_workers=32
+        num_workers=args.num_workers,
     )
 
     system = System(args)
@@ -213,7 +214,7 @@ def main():
             collate_fn=Collator(),
             batch_size=args.batch_size,
             shuffle=True,
-            num_workers=32,
+            num_workers=args.num_workers,
             drop_last=True
         )
 
