@@ -94,8 +94,8 @@ class System(nn.Module):
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), 0.1)
-            if torch.isinf(grad_norm):
-                print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf, skipping batch', flush=True)
+            if torch.isinf(grad_norm) or torch.isnan(grad_norm):
+                print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 continue
