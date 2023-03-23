@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from g2p_en import G2p
 
-from .ctc import ctc_forward_score3
+from .ctc import ctc_forward_score3, ctc_reduce_mean
 from .star import star_ctc_forward_score
 
 
@@ -82,7 +82,9 @@ class CTCRecognizer(nn.Module):
         with torch.autocast(device_type='cuda', dtype=torch.float32):
             logits = self.log_probs(features).to(torch.float32)
             logits = logits.permute(1, 0, 2) # T, N, C
-            return self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+            #loss = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+            loss = ctc_reduce_mean(ctc_forward_score3(logits, targets, input_lengths, target_lengths), target_lengths)
+            return loss
 
 
 class StarRecognizer(nn.Module):

@@ -134,11 +134,8 @@ def ctc_forward_score3(
     #log_alpha = emissions.new_full((T, N, S_), float('-inf'))
     log_alpha = emissions.new_full((T, N, S_), torch.finfo(torch.float).min)
 
+    # initial states at t are a leading blank or a leading symbol
     log_alpha[0, :, :2] = emissions[0, :].gather(-1, _t_a_r_g_e_t_s_[:, :2])
-
-    # zero symbol at t=1 comes from a self loop
-    from_self = log_alpha[0, :, 0].clone()
-    log_alpha[1, :, 0] = from_self + emissions[1, :].gather(-1, _t_a_r_g_e_t_s_[:, 0:1]).squeeze()
 
     blanks = _t_a_r_g_e_t_s_[:, 2:] == blank
     same_label_as_prev = (_t_a_r_g_e_t_s_[:, 3:-1:2] == _t_a_r_g_e_t_s_[:, 1:-3:2]).repeat_interleave(2, dim=-1)
@@ -147,22 +144,25 @@ def ctc_forward_score3(
     for t in range(1, T):
         prev = log_alpha[t-1].clone()
 
+        # zero symbol comes from a self loop
+        into_first_blank = prev[:, :1]
+        log_alpha[t, :, :1] = into_first_blank + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, :1])
+
+        # first symbol comes from a self loop or a leading blank
+        into_first = prev[:, 1:2].logaddexp(prev[:, 0:1])
+        log_alpha[t, :, 1:2] = into_first + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 1:2])
+
         from_self = prev[:, 2:]
         from_prev_symbol = prev[:, 1:-1]
         from_skip = prev[:, :-2]
 
-        into_blanks = from_self.logaddexp(from_prev_symbol)
-        into_labels = into_blanks.logaddexp(from_skip)
+        from_self_or_prev_symbol = from_self.logaddexp(from_prev_symbol)
+        into_blanks_or_same = from_self_or_prev_symbol
+        into_labels = from_self_or_prev_symbol.logaddexp(from_skip)
 
-        # transition into blank: no skips across blanks
-        transitions = torch.where(blanks, into_blanks, into_labels)
-
-        # transition from the same symbol: must go through a blank (no skips)
-        transitions = torch.where(same_label_as_prev, into_blanks, transitions)
-
-        # first symbol past t=1 only comes from a self loop or a leading blank
-        into_first = prev[:, 1:].logaddexp(prev[:, :-1])
-        log_alpha[t, :, 1:] = into_first + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 1:])
+        transitions = torch.where(blanks | same_label_as_prev,
+                                  into_blanks_or_same,
+                                  into_labels)
 
         log_alpha[t, :, 2:] = transitions + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 2:])
 
@@ -174,8 +174,14 @@ def ctc_forward_score3(
     return -last_blank.logaddexp(last_symbol)
 
 
+def ctc_reduce_mean(losses, target_lengths):
+    return (losses / target_lengths).mean(-1)
+
+
 if __name__ == '__main__':
     torch.manual_seed(2)
+    torch.set_printoptions(precision=4, sci_mode=False, linewidth=200, edgeitems=7)
+
     logits0 = torch.randn(5, 7).log_softmax(-1)
     logits = logits0
     print('logits')
@@ -210,3 +216,23 @@ if __name__ == '__main__':
 
     print('ctc2[0]    ', ctc_forward_score2(logits0, torch.LongTensor([1,2,3])))
     print('ctc2[1]    ', ctc_forward_score2(logits1, targets1))
+
+
+    logits2 = torch.randn(20, 7).log_softmax(-1)
+    targets2 = torch.LongTensor([1,1,2,3,3,2,1,3,4,4,2,2,3])
+    input_lengths = torch.LongTensor([len(logits2)])
+    target_lengths = torch.LongTensor([len(targets2)])
+    logits = torch.stack([logits2], dim=1)
+    targets = torch.stack([targets2], dim=0)
+
+    print('ctc3     ', ctc_reduce_mean(ctc_forward_score3(
+        logits, targets,
+        input_lengths,
+        target_lengths), target_lengths))
+
+    print('torch ctc', torch.nn.functional.ctc_loss(
+        logits,
+        targets,
+        input_lengths,
+        target_lengths, blank=0, reduction='mean' # ooooh
+    ))
