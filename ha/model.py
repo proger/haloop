@@ -109,8 +109,9 @@ class StarRecognizer(nn.Module):
             logits = self.log_probs(features).to(torch.float32)
 
             logits = logits.permute(1, 0, 2) # T, N, C
-            loss = ctc_reduce_mean(star_ctc_forward_score(logits, targets, input_lengths, target_lengths,
-                                                          star_penalty=self.star_penalty), target_lengths)
+            losses = star_ctc_forward_score(logits, targets, input_lengths, target_lengths,
+                                            star_penalty=self.star_penalty)
+            loss = ctc_reduce_mean(losses, target_lengths)
             return loss
 
 

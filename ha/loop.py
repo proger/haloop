@@ -87,6 +87,10 @@ class System(nn.Module):
                 scaler.update()
                 continue
 
+            if torch.isinf(loss):
+                print(f'[{epoch + 1}, {i + 1:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
+                continue
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), 0.1)
