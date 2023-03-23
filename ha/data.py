@@ -2,6 +2,7 @@ from pathlib import Path
 
 import torch
 import torchaudio
+from kaldialign import align
 
 
 def make_frames(wav):
@@ -50,9 +51,14 @@ class WordDrop(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        frames, text = self.dataset[index]
+        frames, original_text = self.dataset[index]
         generator = torch.Generator().manual_seed(index)
-        text = ' '.join(w for w in text.split(' ') if torch.rand(1, generator=generator) > self.p_drop_words)
+        text = ' '.join(w for w in original_text.split(' ') if torch.rand(1, generator=generator) > self.p_drop_words)
+        if not text:
+            text = original_text
+        if False:
+            hyp, _ref = list(zip(*align(text.split(), original_text.split(), '*')))
+            print(index, ' '.join(h.replace(' ', '_') for h in hyp))
         return frames, text
 
 
