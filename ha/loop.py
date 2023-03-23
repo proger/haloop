@@ -227,8 +227,8 @@ def main():
                 best_valid_loss = valid_loss
                 print('saving model', args.save)
                 torch.save(system.state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
-
-    system.evaluate(-100, valid_loader)
+    else:
+        system.evaluate(-100, valid_loader)
 
 if __name__ == '__main__':
     main()
