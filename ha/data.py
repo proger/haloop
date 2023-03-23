@@ -60,10 +60,12 @@ def make_dataset(s):
     match s.split(':', maxsplit=1):
         case [subset]:
             return LibriSpeech(subset)
+        case ['head', subset]:
+            return torch.utils.data.Subset(LibriSpeech(subset), range(16))
         case ['wdrop.4', subset]:
-            return WordDrop(LibriSpeech(subset), p_drop_words=0.4)
+            return WordDrop(make_dataset(subset), p_drop_words=0.4)
         case ['wdrop.1', subset]:
-            return WordDrop(LibriSpeech(subset), p_drop_words=0.1)
+            return WordDrop(make_dataset(subset), p_drop_words=0.1)
 
 
 def concat_datasets(s):
