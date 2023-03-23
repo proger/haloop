@@ -90,17 +90,17 @@ def ctc_forward_score2(
         )
 
         # transition from the same symbol: must go through a blank (no skips)
-        same_symbols = _t_a_r_g_e_t_s_[2:] == _t_a_r_g_e_t_s_[:-2]
+        same_label_as_prev = (_t_a_r_g_e_t_s_[3:-1:2] == _t_a_r_g_e_t_s_[1:-3:2]).repeat_interleave(2, dim=-1)
+        same_label_as_prev = torch.cat([same_label_as_prev, same_label_as_prev.new_zeros(1)], dim=-1)
         transitions = torch.where(
-            same_symbols,
+            same_label_as_prev,
             self_loop.logaddexp(prev_symbol),
             transitions
         )
 
-        if t > 1:
-            # first symbol past t=1 only comes from a self loop
-            self_loop_ = log_alpha[t-1, 1:]
-            log_alpha[t, 1:] = self_loop_ + emissions[t, _t_a_r_g_e_t_s_[1:]]
+        # first symbol past t=1 only comes from a self loop or a leading blank
+        into_first = log_alpha[t-1, 1:].logaddexp(log_alpha[t-1, :-1])
+        log_alpha[t, 1:] = into_first + emissions[t, _t_a_r_g_e_t_s_[1:]]
 
         log_alpha[t, 2:] = transitions + emissions[t, _t_a_r_g_e_t_s_[2:]]
 
@@ -136,33 +136,33 @@ def ctc_forward_score3(
 
     log_alpha[0, :, :2] = emissions[0, :].gather(-1, _t_a_r_g_e_t_s_[:, :2])
 
-    # first symbol at t=1 comes from a self loop or a leading blank
-    leading_blank = log_alpha[0, :, 0].clone()
-    self_loop = log_alpha[0, :, 1].clone()
-    first_transitions = leading_blank.logaddexp(self_loop)
-    log_alpha[1, :, 1] = first_transitions + emissions[1, :].gather(-1, _t_a_r_g_e_t_s_[:, 1:2]).squeeze()
+    # zero symbol at t=1 comes from a self loop
+    from_self = log_alpha[0, :, 0].clone()
+    log_alpha[1, :, 0] = from_self + emissions[1, :].gather(-1, _t_a_r_g_e_t_s_[:, 0:1]).squeeze()
 
     blanks = _t_a_r_g_e_t_s_[:, 2:] == blank
-    same_symbols = _t_a_r_g_e_t_s_[:, 2:] == _t_a_r_g_e_t_s_[:, :-2]
+    same_label_as_prev = (_t_a_r_g_e_t_s_[:, 3:-1:2] == _t_a_r_g_e_t_s_[:, 1:-3:2]).repeat_interleave(2, dim=-1)
+    same_label_as_prev = torch.cat([same_label_as_prev, same_label_as_prev.new_zeros(N, 1)], dim=-1)
 
-    for t in range(2, T):
-        self_loop = log_alpha[t-1, :, 2:].clone()
-        prev_symbol = log_alpha[t-1, :, 1:-1].clone()
-        skip = log_alpha[t-1, :, :-2].clone()
+    for t in range(1, T):
+        prev = log_alpha[t-1].clone()
 
-        basic_transitions = self_loop.logaddexp(prev_symbol)
-        basic_and_skip = basic_transitions.logaddexp(skip)
+        from_self = prev[:, 2:]
+        from_prev_symbol = prev[:, 1:-1]
+        from_skip = prev[:, :-2]
+
+        into_blanks = from_self.logaddexp(from_prev_symbol)
+        into_labels = into_blanks.logaddexp(from_skip)
 
         # transition into blank: no skips across blanks
-        transitions = torch.where(blanks, basic_transitions, basic_and_skip)
+        transitions = torch.where(blanks, into_blanks, into_labels)
 
         # transition from the same symbol: must go through a blank (no skips)
-        transitions = torch.where(same_symbols, basic_transitions, transitions)
+        transitions = torch.where(same_label_as_prev, into_blanks, transitions)
 
-        if t > 1:
-            # first symbol past t=1 only comes from a self loop
-            self_loop_ = log_alpha[t-1, :, 1:]
-            log_alpha[t, :, 1:] = self_loop_ + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 1:])
+        # first symbol past t=1 only comes from a self loop or a leading blank
+        into_first = prev[:, 1:].logaddexp(prev[:, :-1])
+        log_alpha[t, :, 1:] = into_first + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 1:])
 
         log_alpha[t, :, 2:] = transitions + emissions[t].gather(-1, _t_a_r_g_e_t_s_[:, 2:])
 
@@ -180,7 +180,7 @@ if __name__ == '__main__':
     logits = logits0
     print('logits')
     print(logits.T)
-    targets = torch.LongTensor([1,2,3])
+    targets = torch.LongTensor([1,2,3,3])
     print('scores')
     print(ctc_forward_score1(logits, targets))
 
@@ -196,17 +196,17 @@ if __name__ == '__main__':
 
     print(logits, targets)
 
+    print('ctc3     ', ctc_forward_score3(
+        logits, targets,
+        input_lengths,
+        target_lengths))
+
     print('torch ctc', torch.nn.functional.ctc_loss(
         logits,
         targets,
         input_lengths,
         target_lengths, blank=0, reduction='none'
     ))
-
-    print('ctc3     ', ctc_forward_score3(
-        logits, targets,
-        input_lengths,
-        target_lengths))
 
     print('ctc2[0]    ', ctc_forward_score2(logits0, torch.LongTensor([1,2,3])))
     print('ctc2[1]    ', ctc_forward_score2(logits1, targets1))

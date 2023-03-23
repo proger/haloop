@@ -192,6 +192,8 @@ def main():
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
 
+        system.evaluate(-99, valid_loader)
+
     if args.compile:
         system = torch.compile(system, options={'trace.graph_diagram': True})
 
