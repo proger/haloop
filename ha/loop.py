@@ -12,7 +12,8 @@ import wandb
 
 from .data import concat_datasets
 from .beam import ctc_beam_search_decode_logits
-from .model import Encoder, CTCRecognizer, StarRecognizer, Vocabulary
+from .model import Encoder, CTCRecognizer, StarRecognizer
+from .xen import Vocabulary
 
 
 console = Console()

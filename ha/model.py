@@ -2,11 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from g2p_en import G2p
-
 from .ctc import ctc_forward_score3, ctc_reduce_mean
 from .star import star_ctc_forward_score
-
 
 class Encoder(nn.Module):
     def __init__(self, input_dim=13, subsample_dim=128, hidden_dim=1024):
@@ -31,34 +28,6 @@ class Encoder(nn.Module):
         x, _ = self.lstm(x)
         return x.relu()
 
-
-class Vocabulary:
-    def __init__(self):
-        self.g2p = G2p()
-
-        # http://www.speech.cs.cmu.edu/cgi-bin/cmudict
-        self.rdictionary = [" ",
-                            "AA0", "AA1", "AE0", "AE1", "AH0", "AH1", "AO0", "AO1", "AW0", "AW1", "AY0", "AY1",
-                            "B", "CH", "D", "DH",
-                            "EH0", "EH1", "ER0", "ER1", "EY0", "EY1",
-                            "F", "G", "HH",
-                            "IH0", "IH1", "IY0", "IY1",
-                            "JH", "K", "L", "M", "N", "NG",
-                            "OW0", "OW1", "OY0", "OY1",
-                            "P", "R", "S", "SH", "T", "TH",
-                            "UH0", "UH1", "UW0", "UW1",
-                            "V", "W", "Y", "Z", "ZH"]
-        self.dictionary = {c: i for i, c in enumerate(self.rdictionary, start=1)}
-
-    def __len__(self):
-        return len(self.rdictionary) + 1
-
-    def encode(self, text):
-        labels = self.g2p(text)
-        return torch.LongTensor([self.dictionary[c.replace('2', '0')] for c in labels if c != "'"])
-
-    def decode(self, labels):
-        return ['' if l == 0 else self.rdictionary[l-1] for l in labels]
 
 
 class CTCRecognizer(nn.Module):
@@ -116,6 +85,7 @@ class StarRecognizer(nn.Module):
 
 
 if __name__ == '__main__':
+    from .xen import Vocabulary
     encoder = Encoder()
     reco = CTCRecognizer()
     vocabulary = Vocabulary()
