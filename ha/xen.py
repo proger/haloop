@@ -1,5 +1,5 @@
 """
-xen is an extension of CMUdict that includes TIMIT-style acoustic landmarks
+xen is extension of CMUdict that includes TIMIT-style acoustic landmarks compatible with Ukrainian
 designed by Mykola Sazhok
 """
 
@@ -8,21 +8,8 @@ import torch
 from g2p_en import G2p
 
 
-def cmu_to_xen(phoneme):
-    return {
-        'B': ['bcl', 'B'],
-        'CH': ['tcl', 'CH'],
-        'D': ['dcl', 'D'],
-        'G': ['gcl', 'G'],
-        'JH': ['dcl', 'JH'],
-        'K': ['kcl', 'K'],
-        'P': ['pcl', 'P'],
-        'T': ['tcl', 'T']
-    }.get(phoneme, [phoneme])
-
-
 class Vocabulary:
-    def __init__(self):
+    def __init__(self, add_closures=True):
         self.g2p = G2p()
 
         # http://www.speech.cs.cmu.edu/cgi-bin/cmudict
@@ -36,20 +23,36 @@ class Vocabulary:
                             "OW0", "OW1", "OY0", "OY1",
                             "P", "R", "S", "SH", "T", "TH",
                             "UH0", "UH1", "UW0", "UW1",
-                            "V", "W", "Y", "Z", "ZH",
-                            "bcl", "tcl", "dcl", "gcl", "pcl", "kcl"]
+                            "V", "W", "Y", "Z", "ZH"]
+
+        if add_closures:
+            # add TIMIT-style glottal closures
+            self.closures =  {
+                'B': ['bcl', 'B'],
+                'CH': ['tcl', 'CH'],
+                'D': ['dcl', 'D'],
+                'G': ['gcl', 'G'],
+                'JH': ['dcl', 'JH'],
+                'K': ['kcl', 'K'],
+                'P': ['pcl', 'P'],
+                'T': ['tcl', 'T']
+            }
+            self.rdictionary.extend(["bcl", "tcl", "dcl", "gcl", "pcl", "kcl"])
+        else:
+            self.closures = {}
+
         self.dictionary = {c: i for i, c in enumerate(self.rdictionary, start=1)}
 
     def __len__(self):
         return len(self.rdictionary) + 1
 
     def encode(self, text):
-        labels = self.g2p(text)
-        return torch.LongTensor([
-            phoneme
-            for c in labels
-            if c != "'"
-            for phoneme in cmu_to_xen(self.dictionary[c.replace('2', '0')])])
+        labels = [phoneme.replace('2', '0')
+                  for c in self.g2p(text)
+                  if c != "'"
+                  for phoneme in self.closures.get(c, [c])]
+        targets = torch.LongTensor([self.dictionary[phoneme] for phoneme in labels])
+        return targets
 
     def decode(self, labels):
         return ['' if l == 0 else self.rdictionary[l-1] for l in labels]

@@ -20,15 +20,14 @@ console = Console()
 def print(*args, flush=False, **kwargs):
     console.log(*args, **kwargs)
 
-
-vocabulary = Vocabulary()
-
-
 class Collator:
+    def __init__(self, vocabulary):
+        self.vocabulary = vocabulary
+
     def __call__(self, batch):
         input_lengths = torch.tensor([len(b[0]) for b in batch])
         inputs = torch.nn.utils.rnn.pad_sequence([b[0] for b in batch], batch_first=True)
-        targets = [vocabulary.encode(b[1]) for b in batch]
+        targets = [self.vocabulary.encode(b[1]) for b in batch]
         target_lengths = torch.tensor([len(t) for t in targets])
         targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
         return inputs, targets, input_lengths, target_lengths
@@ -39,13 +38,14 @@ class System(nn.Module):
         super().__init__()
         self.args = args
         self.encoder = Encoder().to(args.device)
+        self.vocabulary = Vocabulary(args.glottal_closures)
         if args.star_penalty is not None:
-            self.recognizer = StarRecognizer(star_penalty=args.star_penalty).to(args.device)
+            self.recognizer = StarRecognizer(star_penalty=args.star_penalty,
+                                             vocab_size=len(self.vocabulary)).to(args.device)
         else:
-            self.recognizer = CTCRecognizer().to(args.device)
+            self.recognizer = CTCRecognizer(vocab_size=len(self.vocabulary)).to(args.device)
         self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()), lr=args.lr)
         self.scaler = torch.cuda.amp.GradScaler()
-        self.vocabulary = Vocabulary()
 
     def load_state_dict(self, checkpoint):
         self.encoder.load_state_dict(checkpoint['encoder'])
@@ -184,21 +184,22 @@ def main():
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
+    parser.add_argument('--glottal-closures', action='store_true', help="Add glotal closures to the vocabulary")
     args = parser.parse_args()
 
     print(args)
 
     torch.manual_seed(3407)
 
+    system = System(args)
+
     valid_loader = torch.utils.data.DataLoader(
         concat_datasets(args.eval),
-        collate_fn=Collator(),
+        collate_fn=Collator(system.vocabulary),
         batch_size=16,
         shuffle=False,
         num_workers=args.num_workers,
     )
-
-    system = System(args)
 
     if args.init:
         checkpoint = torch.load(args.init, map_location=args.device)
@@ -212,7 +213,7 @@ def main():
 
         train_loader = torch.utils.data.DataLoader(
             concat_datasets(args.train),
-            collate_fn=Collator(),
+            collate_fn=Collator(system.vocabulary),
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=args.num_workers,
