@@ -19,6 +19,19 @@ class Vocabulary:
         self.pad_id = 0
         self.unk_id = 1
 
+    def state_dict(self):
+        return {
+            'id_to_string': self.id_to_string,
+            'pad_id': self.pad_id,
+            'unk_id': self.unk_id,
+        }
+
+    def load_state_dict(self, state_dict):
+        self.id_to_string = state_dict['id_to_string']
+        self.string_to_id = {v: k for k, v in self.id_to_string.items()}
+        self.pad_id = state_dict['pad_id']
+        self.unk_id = state_dict['unk_id']
+
     def __len__(self):
         return len(self.id_to_string)
 

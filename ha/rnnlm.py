@@ -1,5 +1,6 @@
 from pathlib import Path
 import argparse
+import sys
 
 import torch
 import torch.nn as nn
@@ -44,17 +45,21 @@ class LM(nn.Module):
 
 class System:
     def __init__(self, args):
+        self.vocab = None
+
         if args.init:
             checkpoint = torch.load(args.init)
-            self.vocab = checkpoint['vocab']
+            self.vocab = Vocabulary()
+            self.vocab.load_state_dict(checkpoint['vocab'])
+            extend_vocab = False
         else:
-            self.vocab = None
+            extend_vocab = True
 
         if args.train:
             if args.bytes_as_tokens:
-                self.data, self.vocab = tokenize_bytes(args.train, self.vocab)
+                self.data, self.vocab = tokenize_bytes(args.train, self.vocab, extend_vocab=extend_vocab)
             else:
-                self.data, self.vocab = tokenize_chars(args.train, self.vocab)
+                self.data, self.vocab = tokenize_chars(args.train, self.vocab, extend_vocab=extend_vocab)
             self.batches = SymbolTape(self.data, args.batch_size, args.bptt_len, pad_id=0)
 
         vocab_size = len(self.vocab.id_to_string)
@@ -75,14 +80,14 @@ class System:
 
         self.loss = nn.CrossEntropyLoss(ignore_index=0)
 
-        self.report_every = 1000
+        self.log_interval = args.log_interval
         self.prompts = [
             "a"
         ]
 
     def state_dict(self):
         return {
-            'vocab': self.data.vocab,
+            'vocab': self.vocab.state_dict(),
             'model': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict()
         }
@@ -136,15 +141,15 @@ class System:
             x = ix
         return prompt_logits, joiner.join(out_list)
 
-    def train_one_epoch(self):
+    def train_one_epoch(self, epoch=0):
         model, batches = self.model, self.batches
         optimizer, loss_fn = self.optimizer, self.loss
 
-        state = model.init_hidden(args.batch_size)
+        state = model.init_hidden(self.args.batch_size)
         model.train()
 
         for step in range(len(batches)):
-            batch = batches[step].to(args.device).long()
+            batch = batches[step].to(self.args.device).long()
             model.train()
             optimizer.zero_grad()
             state = model.truncate_hidden(state)
@@ -163,7 +168,7 @@ class System:
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimizer.step()
 
-            if step % self.report_every == 0:
+            if step % self.log_interval == 0:
                 print(f"epoch {epoch} step {step}/{len(batches)} train loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f}")
                 for prompt in self.prompts:
                     _, generated_text = self.complete(prompt, 128, sample=False)
@@ -172,29 +177,28 @@ class System:
                     _, generated_text = self.complete(prompt, 128, sample=True)
                     print('sample', prompt + generated_text)
                 wandb.log({'train/loss': loss.item(),
-                        'train/ppl': loss.exp().item(),
-                        'train/lr': args.lr,
-                        'train/epoch': epoch,
-                        'train/grad_norm': grad_norm.item()})
+                          'train/ppl': loss.exp().item(),
+                          'train/lr': self.args.lr,
+                          'train/epoch': epoch,
+                          'train/grad_norm': grad_norm.item()})
             else:
                 wandb.log({'train/loss': loss.item(),
-                        'train/ppl': loss.exp().item(),
-                        #'train/lr': scheduler.get_last_lr()[0],
-                        'train/lr': args.lr,
-                        'train/epoch': epoch,
-                        'train/grad_norm': grad_norm.item()})
+                           'train/ppl': loss.exp().item(),
+                           #'train/lr': scheduler.get_last_lr()[0],
+                           'train/lr': self.args.lr,
+                           'train/epoch': epoch,
+                           'train/grad_norm': grad_norm.item()})
 
 
-if __name__ == '__main__':
+def main():
     class Formatter(argparse.ArgumentDefaultsHelpFormatter,
                     argparse.MetavarTypeHelpFormatter):
         pass
 
     parser = argparse.ArgumentParser(formatter_class=Formatter)
-    #parser = argparse.ArgumentParser()
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--save', type=Path, default='rnnlm.pt', help="Path to save checkpoint to")
-    parser.add_argument('--device', type=str, default='cpu', help='device')
+    parser.add_argument('--device', type=str, default='cuda:1', help='device')
     parser.add_argument('--lr', default=0.0002, type=float, help='Adam learning rate')
     parser.add_argument('--dropout', default=0, type=float, help='dropout rate')
     parser.add_argument('--epochs', default=1, type=int, help='number of training set iterations')
@@ -203,9 +207,15 @@ if __name__ == '__main__':
     parser.add_argument('--rnn-size', default=512, type=int, help='RNN width')
     parser.add_argument('--num-layers', default=1, type=int, help='RNN depth')
     parser.add_argument('--bytes-as-tokens', action='store_true', help='use bytes as tokens')
-    parser.add_argument('--train', type=Path, help='path to training data')
+    parser.add_argument('--train', type=Path, help='Train model on this data')
     parser.add_argument('--complete', type=str, help='complete this prompt')
+    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
     args = parser.parse_args()
+
+    if not args.train and not args.complete:
+        parser.print_help()
+        print("\nPlease specify either --train or --init", file=sys.stderr)
+        sys.exit(1)
 
     print(args)
 
@@ -217,10 +227,14 @@ if __name__ == '__main__':
         wandb.init(project='rnnlm', config=args)
 
         for epoch in range(args.epochs):
-            self.train_one_epoch()
+            self.train_one_epoch(epoch=epoch)
             torch.save(self.state_dict(), args.save)
 
     if args.complete:
         self.model.eval()
         prompt_score, completion = self.complete("\n" + args.complete, 128, sample=False)
         print(prompt_score.item(), args.complete + completion)
+
+
+if __name__ == '__main__':
+    main()
