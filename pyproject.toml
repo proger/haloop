@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ha1"
+name = "hecto-agent"
 description = 'hecto speech agent for 100 hours'
 readme = "README.md"
 requires-python = ">=3.9"
