@@ -84,6 +84,7 @@ class System:
         self.prompts = [
             "a"
         ]
+        self.args = args
 
     def state_dict(self):
         return {
