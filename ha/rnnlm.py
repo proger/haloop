@@ -169,7 +169,7 @@ class System:
             if step % self.log_interval == 0:
                 outputs = []
                 for prompt in self.prompts:
-                    _, generated_text = self.complete(prompt, 128, sample=False)
+                    _, generated_text = self.complete(prompt, 128, top_k=self.args.top_k)
                     outputs.append(prompt + generated_text)
                 print(f"epoch {epoch} step {step}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
                 wandb.log({'train/loss': loss.item(),
