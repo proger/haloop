@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ha"
-description = 'hecto asr: speech recognizer for 100 hours'
+name = "ha1"
+description = 'hecto speech agent for 100 hours'
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -19,7 +19,6 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
   "click",
@@ -32,9 +31,9 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-Documentation = "https://github.com/proger/ha#readme"
-Issues = "https://github.com/proger/ha/issues"
-Source = "https://github.com/proger/ha"
+Documentation = "https://github.com/proger/ha1#readme"
+Issues = "https://github.com/proger/ha1/issues"
+Source = "https://github.com/proger/ha1"
 
 [project.scripts]
 hac = "ha.loop:main"
@@ -53,7 +52,7 @@ cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=ha --c
 no-cov = "cov --no-cov {args}"
 
 [[tool.hatch.envs.test.matrix]]
-python = ["37", "38", "39", "310", "311"]
+python = ["39", "310", "311"]
 
 [tool.coverage.run]
 branch = true
