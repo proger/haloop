@@ -74,16 +74,14 @@ class System:
         if args.init:
             self.model.load_state_dict(checkpoint['model'])
 
-        self.optimizer = torch.optim.Adam(params=self.model.parameters(), lr=args.lr)
+        self.optimizer = torch.optim.AdamW(params=self.model.parameters(), lr=args.lr, weight_decay=0.01)
         if args.init:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
         self.loss = nn.CrossEntropyLoss(ignore_index=0)
 
         self.log_interval = args.log_interval
-        self.prompts = [
-            "a"
-        ]
+        self.prompts = args.eval_prompts
         self.args = args
 
     def state_dict(self):
@@ -102,7 +100,7 @@ class System:
         return x, self.model.init_hidden(1)
 
     @torch.inference_mode()
-    def complete(self, prompt, steps=512, sample=False):
+    def complete(self, prompt, steps=512, top_k=1):
         model = self.model
         model.eval()
 
@@ -119,13 +117,13 @@ class System:
 
         logits, states = model(x, states)
         prompt_logits = nn.functional.cross_entropy(logits[:-1], x[1:].view(-1), reduction='none').sum() / len(x[1:])
+
+        v, _ = torch.topk(logits, top_k)
+        logits[logits < v[:, [-1]]] = -float('Inf')
         probs = F.softmax(logits, dim=-1)
         probs = probs[-1]
 
-        if sample:
-            ix = probs.multinomial(num_samples=1)
-        else:
-            max_p, ix = torch.topk(probs, k=1, dim=-1)
+        ix = probs.multinomial(num_samples=1)
 
         out_list.append(cast(self.vocab.id_to_string[int(ix)]))
         x = ix.unsqueeze(1)
@@ -133,11 +131,10 @@ class System:
         # decode
         for k in range(steps):
             logits, states = model(x, states)
+            v, _ = torch.topk(logits, top_k)
+            logits[logits < v[:, [-1]]] = -float('Inf')
             probs = F.softmax(logits, dim=-1)
-            if sample:
-                ix = probs.multinomial(1)
-            else:
-                _, ix = torch.topk(probs, k=1, dim=-1)
+            ix = probs.multinomial(num_samples=1)
             out_list.append(cast(self.vocab.id_to_string[int(ix)]))
             x = ix
         return prompt_logits, joiner.join(out_list)
@@ -170,18 +167,16 @@ class System:
             optimizer.step()
 
             if step % self.log_interval == 0:
-                print(f"epoch {epoch} step {step}/{len(batches)} train loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f}")
+                outputs = []
                 for prompt in self.prompts:
                     _, generated_text = self.complete(prompt, 128, sample=False)
-                    print('greedy', prompt + generated_text)
-                for prompt in self.prompts:
-                    _, generated_text = self.complete(prompt, 128, sample=True)
-                    print('sample', prompt + generated_text)
+                    outputs.append(prompt + generated_text)
+                print(f"epoch {epoch} step {step}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
                 wandb.log({'train/loss': loss.item(),
-                          'train/ppl': loss.exp().item(),
-                          'train/lr': self.args.lr,
-                          'train/epoch': epoch,
-                          'train/grad_norm': grad_norm.item()})
+                           'train/ppl': loss.exp().item(),
+                           'train/lr': self.args.lr,
+                           'train/epoch': epoch,
+                           'train/grad_norm': grad_norm.item()})
             else:
                 wandb.log({'train/loss': loss.item(),
                            'train/ppl': loss.exp().item(),
@@ -210,21 +205,22 @@ def main():
     parser.add_argument('--bytes-as-tokens', action='store_true', help='use bytes as tokens')
     parser.add_argument('--train', type=Path, help='Train model on this data')
     parser.add_argument('--complete', type=str, help='complete this prompt')
+    parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
+    parser.add_argument('--eval-prompts', type=str, nargs='+', default=['\nа', '\nя'], help="Prompts to complete during evaluation")
     args = parser.parse_args()
 
     if not args.train and not args.complete:
         parser.print_help()
-        print("\nPlease specify either --train or --init", file=sys.stderr)
+        print("\nPlease specify either --train or --complete", file=sys.stderr)
         sys.exit(1)
-
-    print(args)
 
     torch.manual_seed(3407)
 
     self = System(args)
 
     if args.train:
+        print(args)
         wandb.init(project='rnnlm', config=args)
 
         for epoch in range(args.epochs):
@@ -233,9 +229,8 @@ def main():
 
     if args.complete:
         self.model.eval()
-        prompt_score, completion = self.complete("\n" + args.complete, 128, sample=False)
+        prompt_score, completion = self.complete("\n" + args.complete, 1024, top_k=args.top_k)
         print(prompt_score.item(), args.complete + completion)
-
 
 if __name__ == '__main__':
     main()
