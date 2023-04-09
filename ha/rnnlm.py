@@ -37,7 +37,7 @@ class LM(nn.Module):
         c = weight.new_zeros(self.num_layers, batch_size, self.hidden_dim)
         return (h,c)
 
-    def truncate_hidden(sellf, state):
+    def truncate_hidden(self, state):
         h,c = state
         return (h.detach(), c.detach())
 
@@ -86,6 +86,7 @@ class System:
 
     def state_dict(self):
         return {
+            'args': vars(self.args),
             'vocab': self.vocab.state_dict(),
             'model': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict()
