@@ -1,9 +1,9 @@
 
 import torch
 
-
+@torch.jit.script
 def transducer_forward_score1(
-    transcription_probabilities, # (T, K)  # f   # time starts at 1 (zero-padded by one frame)
+    transcription_probabilities, # (T, K)  # f   # time starts at 0
     prediction_probabilities, # (U, K)     # g   # first symbol is blank (0)
     targets # (U,)                         # y   # first symbol is blank (0)
 ):
@@ -14,16 +14,19 @@ def transducer_forward_score1(
     T, K = transcription_probabilities.shape
     U, K = prediction_probabilities.shape
 
-    alpha = transcription_probabilities.new_zeros((T, U))
+    alpha = transcription_probabilities.new_zeros((T+1, U))
     y_prob = transcription_probabilities.new_zeros((T, U))
-    blank_prob = transcription_probabilities.new_zeros((T, U))
+    blank_prob = transcription_probabilities.new_zeros((T+1, U))
 
-    alpha[0, 0] = 1
-    blank_prob[0, 0] = 1
+    alpha[-1, 0] = 1
+    blank_prob[-1, 0] = 1
 
-    for t in range(1, T):
+    #print(alpha.T)
+
+    for t in range(T):
+        f = transcription_probabilities[t]
+
         for u in range(U):
-            f = transcription_probabilities[t]
             g = prediction_probabilities[u]
 
             h = (f + g).softmax(dim=-1)
@@ -31,19 +34,24 @@ def transducer_forward_score1(
             blank_prob[t, u] = h[0]
             y_prob[t, u] = h[targets[u]]
 
-            alpha[t, u] = alpha[t-1, u] * blank_prob[t-1, u] + alpha[t, u-1] * y_prob[t, u-1]
+            alpha[t, u] = alpha[t-1, u].clone() * blank_prob[t-1, u].clone() + alpha[t, u-1].clone() * y_prob[t, u-1].clone()
 
-    return alpha[t, u] * y_prob[t, u]
+        #print(alpha.T)
+
+    return alpha[T-1, U-1] * y_prob[T-1, U-1]
 
 
 if __name__ == '__main__':
     transcription_probabilities = torch.tensor([[1.0, 0.0, 0.0, 0.0],
                                                 [0.1, 0.2, 0.3, 0.4],
                                                 [0.1, 0.2, 0.3, 0.4],
-                                                [0.1, 0.2, 0.3, 0.4]])
+                                                [0.1, 0.2, 0.3, 0.4]], requires_grad=True)
     prediction_probabilities = torch.tensor([[1.0, 0.0, 0.0, 0.0],
                                              [0.1, 0.2, 0.3, 0.4],
-                                             [0.1, 0.2, 0.3, 0.4]])
+                                             [0.1, 0.2, 0.3, 0.4]], requires_grad=True)
     targets = torch.tensor([0, 1, 2])
 
-    print(transducer_forward_score1(transcription_probabilities, prediction_probabilities, targets))
+    loss = transducer_forward_score1(transcription_probabilities, prediction_probabilities, targets)
+    print(loss)
+    loss.backward()
+    print(transcription_probabilities.grad)
