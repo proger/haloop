@@ -1,7 +1,7 @@
 
 import torch
 
-@torch.jit.script
+#@torch.jit.script
 def transducer_forward_score1(
     transcription_probs, # (T, K)  # f   # time starts at 0
     prediction_probs, # (U, K)     # g   # first symbol is blank (0)
@@ -40,7 +40,9 @@ def transducer_forward_score1(
     return alpha[T-1, U-1] * joint_probs[T-1, U-1, 0]
 
 
-if __name__ == '__main__':
+
+
+def test_simple1():
     transcription_probabilities = torch.tensor([[1.0, 0.0, 0.0, 0.0],
                                                 [0.1, 0.2, 0.3, 0.4],
                                                 [0.1, 0.2, 0.3, 0.4],
@@ -54,3 +56,45 @@ if __name__ == '__main__':
     print(loss)
     loss.backward()
     print(transcription_probabilities.grad)
+
+
+def _test_bigger_compile2():
+    # does not work: data-dependent operators
+    torch.manual_seed(42)
+
+    with torch.device('cuda:1'):
+
+        transcription_probabilities = torch.randn(400, 31, requires_grad=True)
+        prediction_probabilities = torch.randn(10, 31, requires_grad=True)
+        targets = torch.randint(0, 30, (10,))
+
+        f = torch.compile(transducer_forward_score1, mode='reduce-overhead', fullgraph=True)
+
+        for _ in range(100):
+            loss = f(transcription_probabilities, prediction_probabilities, targets)
+            loss.backward()
+
+
+def _test_bigger_script2():
+    torch.manual_seed(42)
+
+    transcription_probabilities = torch.randn(400, 31, requires_grad=True)
+    prediction_probabilities = torch.randn(10, 31, requires_grad=True)
+    targets = torch.randint(0, 30, (10,))
+
+    from torch.profiler import profile, record_function, ProfilerActivity
+
+    with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+        f = torch.jit.script(transducer_forward_score1)
+
+        for _ in range(1):
+            with record_function("forward+backward"):
+                loss = f(transcription_probabilities, prediction_probabilities, targets)
+                loss.backward()
+
+    print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=20))
+
+
+if __name__ == '__main__':
+    import pytest
+    pytest.main(["--no-header", "-v", "-s", __file__])
