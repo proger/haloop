@@ -2,12 +2,17 @@ from pathlib import Path
 import argparse
 import sys
 
+from rich.console import Console
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 
 from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, SymbolTape
+
+console = Console()
+def print(*args, flush=False, **kwargs):
+    console.log(*args, **kwargs)
 
 
 class LM(nn.Module):
@@ -78,7 +83,16 @@ class System:
                 self.data, self.vocab = tokenize_bytes(args.train, self.vocab, extend_vocab=extend_vocab)
             else:
                 self.data, self.vocab = tokenize_chars(args.train, self.vocab, extend_vocab=extend_vocab)
-            self.batches = SymbolTape(self.data, args.batch_size, args.bptt_len, pad_id=0)
+            self.dataset = SymbolTape(self.data, args.batch_size, args.bptt_len, pad_id=0)
+
+            self.batches = torch.utils.data.DataLoader(
+                self.dataset,
+                batch_size=1,
+                shuffle=False,
+                num_workers=args.num_workers,
+                prefetch_factor=2,
+                drop_last=False
+            )
 
         vocab_size = len(self.vocab.id_to_string)
 
@@ -171,8 +185,8 @@ class System:
         state = model.init_hidden(self.args.batch_size)
         model.train()
 
-        for step in range(len(batches)):
-            batch = batches[step].to(self.args.device).long()
+        for step, batch in enumerate(batches):
+            batch = batch.to(self.args.device).long().squeeze(0)
             model.train()
             optimizer.zero_grad()
             state = model.truncate_hidden(state)
@@ -230,7 +244,9 @@ def main():
     parser.add_argument('--complete', type=str, help='complete this prompt')
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
-    parser.add_argument('--eval-prompts', type=str, nargs='+', default=['\nа', '\nя'], help="Prompts to complete during evaluation")
+    #parser.add_argument('--eval-prompts', type=str, nargs='+', default=['\nа', '\nя'], help="Prompts to complete during evaluation")
+    parser.add_argument('--eval-prompts', type=str, nargs='+', default=['\nhello', '\nwhat '], help="Prompts to complete during evaluation")
+    parser.add_argument('--num-workers', type=int, default=8, help="Number of workers for data loading")
     args = parser.parse_args()
 
     if not args.train and not args.complete:
