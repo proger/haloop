@@ -110,6 +110,10 @@ class System:
         if args.init:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
+        self.scaler = torch.cuda.amp.GradScaler()
+        if args.init:
+            self.scaler.load_state_dict(checkpoint['scaler'])
+
         self.loss = nn.CrossEntropyLoss(ignore_index=0)
 
         self.log_interval = args.log_interval
@@ -124,7 +128,8 @@ class System:
             'args': vars(self.args),
             'vocab': self.vocab.state_dict(),
             'model': self.model.state_dict(),
-            'optimizer': self.optimizer.state_dict()
+            'optimizer': self.optimizer.state_dict(),
+            'scaler': self.scaler.state_dict(),
         }
 
     def prepare_prompt(self, prompt):
@@ -180,40 +185,60 @@ class System:
 
     def train_one_epoch(self, epoch=0):
         model, batches = self.model, self.batches
-        optimizer, loss_fn = self.optimizer, self.loss
+        optimizer, scaler, loss_fn = self.optimizer, self.scaler, self.loss
 
         state = model.init_hidden(self.args.batch_size)
         model.train()
+        optimizer.zero_grad()
 
-        for step, batch in enumerate(batches):
+        for i, batch in enumerate(batches):
             batch = batch.to(self.args.device).long().squeeze(0)
-            model.train()
-            optimizer.zero_grad()
             state = model.truncate_hidden(state)
 
             input = batch[:-1]
             target = batch[1:].reshape(-1)
 
-            output, state = model(input, state)
-            loss = loss_fn(output, target)
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-            optimizer.step()
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                output, state = model(input, state)
+                loss = loss_fn(output, target)
 
-            if step % self.log_interval == 0:
+            if torch.isnan(loss):
+                print(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
+                scaler.update()
+                continue
+
+            if torch.isinf(loss):
+                print(f'[{epoch + 1}, {i + 1:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
+                continue
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+            if torch.isinf(grad_norm) or torch.isnan(grad_norm):
+                print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                continue
+
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+
+            if i % self.log_interval == 0:
                 outputs = []
                 for prompt in self.prompts:
-                    _, generated_text = self.complete(prompt, 128, top_k=self.args.top_k)
+                    _, generated_text = self.complete(prompt, self.args.bptt_len, top_k=self.args.top_k)
                     if isinstance(generated_text, bytes):
                         outputs.append(str(prompt + generated_text, 'utf-8', errors='replace'))
                     else:
                         outputs.append(prompt + generated_text)
-                print(f"epoch {epoch} step {step}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
+                print(f"epoch {epoch} step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
                 wandb.log({'train/loss': loss.item(),
                            'train/ppl': loss.exp().item(),
                            'train/lr': self.args.lr,
                            'train/epoch': epoch,
                            'train/grad_norm': grad_norm.item()})
+                model.train()
             else:
                 wandb.log({'train/loss': loss.item(),
                            'train/ppl': loss.exp().item(),
