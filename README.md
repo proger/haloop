@@ -1,6 +1,6 @@
 # haloop
 
-[![PyPI Version](https://img.shields.io/pypi/v/hecto-agent.svg)](https://pypi.python.org/pypi/hecto-agent)
+[![PyPI Version](https://img.shields.io/pypi/v/haloop.svg)](https://pypi.python.org/pypi/haloop)
 
 Haloop provides `hac` program for acoustic model training and `hal` for language model. It is available on PyPI:
 
