@@ -24,11 +24,29 @@ class LM(nn.Module):
 
         self.out_layer.weight = self.embedding.weight
 
-    def forward(self, input, state):
+    def forward(self,
+                input, # (T, N)
+                state # ((L, N, H), (L, N, H))
+                ):
         emb = self.embedding(input)
+
         output, state = self.rnn(emb, state)
-        output = self.out_layer(output)
+        output = self.out_layer(output) # (T, N, V)
+
         output = output.view(-1, self.num_classes)
+        return output, state
+
+    def forward_batch_first(self,
+                            input, # (N, T),
+                            state # ((L, N, H), (L, N, H))
+                            ):
+        emb = self.embedding(input)
+        emb = emb.transpose(0,1) # (T, N, H)
+
+        output, state = self.rnn(emb, state)
+        output = self.out_layer(output) # (T, N, V)
+        output = output.transpose(0,1) # (N, T, V)
+
         return output, state
 
     def init_hidden(self, batch_size):
@@ -81,7 +99,10 @@ class System:
         self.loss = nn.CrossEntropyLoss(ignore_index=0)
 
         self.log_interval = args.log_interval
-        self.prompts = args.eval_prompts
+        if args.bytes_as_tokens:
+            self.prompts = [prompt.encode('utf-8') for prompt in args.eval_prompts]
+        else:
+            self.prompts = args.eval_prompts
         self.args = args
 
     def state_dict(self):
@@ -95,7 +116,7 @@ class System:
     def prepare_prompt(self, prompt):
         device = next(self.model.parameters()).device
 
-        prompt_list = [self.vocab.string_to_id[char] for char in prompt]
+        prompt_list = [self.vocab.string_to_id[char] if isinstance(char, str) else char for char in prompt]
         x = torch.tensor(prompt_list).to(device).unsqueeze(1).long()
 
         return x, self.model.init_hidden(1)
@@ -107,10 +128,13 @@ class System:
 
         joiner = ''
         def cast(s):
+            nonlocal joiner
             if isinstance(s, int):
-                nonlocal joiner
                 joiner = b''
                 return s.to_bytes(1, 'big')
+            elif isinstance(s, bytes):
+                joiner = b''
+                return s
             return s
 
         out_list = []
@@ -156,11 +180,6 @@ class System:
             input = batch[:-1]
             target = batch[1:].reshape(-1)
 
-            batch_size = input.shape[1]
-            prev_batch_size = state[0].shape[1]
-            if batch_size != prev_batch_size:
-                h,c = state
-                state = h[:, :batch_size, :], c[:, :batch_size, :]
             output, state = model(input, state)
             loss = loss_fn(output, target)
             loss.backward()
@@ -171,7 +190,10 @@ class System:
                 outputs = []
                 for prompt in self.prompts:
                     _, generated_text = self.complete(prompt, 128, top_k=self.args.top_k)
-                    outputs.append(prompt + generated_text)
+                    if isinstance(generated_text, bytes):
+                        outputs.append(str(prompt + generated_text, 'utf-8', errors='replace'))
+                    else:
+                        outputs.append(prompt + generated_text)
                 print(f"epoch {epoch} step {step}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
                 wandb.log({'train/loss': loss.item(),
                            'train/ppl': loss.exp().item(),
