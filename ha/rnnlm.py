@@ -94,6 +94,10 @@ class System:
                 drop_last=False
             )
 
+        if not self.vocab:
+            self.vocab = Vocabulary.bytes()
+            args.bytes_as_tokens = True
+
         vocab_size = len(self.vocab.id_to_string)
 
         self.model = LM(vocab_size=vocab_size,
@@ -118,9 +122,9 @@ class System:
 
         self.log_interval = args.log_interval
         if args.bytes_as_tokens:
-            self.prompts = [prompt.encode('utf-8') for prompt in args.eval_prompts]
+            self.prompts = [prompt.encode('utf-8') for prompt in args.complete]
         else:
-            self.prompts = args.eval_prompts
+            self.prompts = args.complete
         self.args = args
 
     def state_dict(self):
@@ -183,7 +187,7 @@ class System:
             x = ix
         return prompt_logits, joiner.join(out_list)
 
-    def train_one_epoch(self, epoch=0):
+    def train_one_epoch(self, epoch=0, step=0):
         model, batches = self.model, self.batches
         optimizer, scaler, loss_fn = self.optimizer, self.scaler, self.loss
 
@@ -191,7 +195,7 @@ class System:
         model.train()
         optimizer.zero_grad()
 
-        for i, batch in enumerate(batches):
+        for i, batch in enumerate(batches, start=step):
             batch = batch.to(self.args.device).long().squeeze(0)
             state = model.truncate_hidden(state)
 
@@ -225,13 +229,7 @@ class System:
             optimizer.zero_grad(set_to_none=True)
 
             if i % self.log_interval == 0:
-                outputs = []
-                for prompt in self.prompts:
-                    _, generated_text = self.complete(prompt, self.args.bptt_len, top_k=self.args.top_k)
-                    if isinstance(generated_text, bytes):
-                        outputs.append(str(prompt + generated_text, 'utf-8', errors='replace'))
-                    else:
-                        outputs.append(prompt + generated_text)
+                _, outputs = self.evaluate()
                 print(f"epoch {epoch} step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
                 wandb.log({'train/loss': loss.item(),
                            'train/ppl': loss.exp().item(),
@@ -247,6 +245,23 @@ class System:
                            'train/epoch': epoch,
                            'train/grad_norm': grad_norm.item()})
 
+            if self.args.max_steps >= 0 and i == self.args.max_steps:
+                break
+
+        return i+1
+
+    def evaluate(self):
+        prompt_scores = []
+        outputs = []
+        for prompt in self.prompts:
+            prompt_score, completion = self.complete(prompt, self.args.bptt_len, top_k=self.args.top_k)
+            if isinstance(completion, bytes):
+                outputs.append(str(prompt + completion, 'utf-8', errors='replace'))
+            else:
+                outputs.append(prompt + completion)
+            prompt_scores.append(prompt_score.item())
+        return prompt_scores, outputs
+
 
 def main():
     class Formatter(argparse.ArgumentDefaultsHelpFormatter,
@@ -260,24 +275,19 @@ def main():
     parser.add_argument('--lr', default=0.0002, type=float, help='Adam learning rate')
     parser.add_argument('--dropout', default=0, type=float, help='dropout rate')
     parser.add_argument('--epochs', default=1, type=int, help='number of training set iterations')
-    parser.add_argument('--batch-size', default=128, type=int, help='batch size')
-    parser.add_argument('--bptt-len', default=256, type=int, help='RNN window size')
-    parser.add_argument('--rnn-size', default=512, type=int, help='RNN width')
+    parser.add_argument('--max-steps', default=-1, type=int, help='maximum number of training steps (useful for e.g. lr search)')
+    parser.add_argument('--batch-size', default=4096, type=int, help='batch size')
+    parser.add_argument('--bptt-len', default=128, type=int, help='RNN window size')
+    parser.add_argument('--rnn-size', default=1024, type=int, help='RNN width')
     parser.add_argument('--num-layers', default=1, type=int, help='RNN depth')
     parser.add_argument('--bytes-as-tokens', action='store_true', help='use bytes as tokens')
     parser.add_argument('--train', type=Path, help='Train model on this data')
-    parser.add_argument('--complete', type=str, help='complete this prompt')
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
-    #parser.add_argument('--eval-prompts', type=str, nargs='+', default=['\nа', '\nя'], help="Prompts to complete during evaluation")
-    parser.add_argument('--eval-prompts', type=str, nargs='+', default=['\nhello', '\nwhat '], help="Prompts to complete during evaluation")
+    #parser.add_argument('--complete, type=str, nargs='+', default=['\nа', '\nя'], help="Prompts to complete during evaluation")
+    parser.add_argument('--complete', type=str, nargs='+', default=['\nhello', '\nwhat '], help="Prompts to complete during evaluation")
     parser.add_argument('--num-workers', type=int, default=8, help="Number of workers for data loading")
     args = parser.parse_args()
-
-    if not args.train and not args.complete:
-        parser.print_help()
-        print("\nPlease specify either --train or --complete", file=sys.stderr)
-        sys.exit(1)
 
     torch.manual_seed(3407)
 
@@ -287,14 +297,16 @@ def main():
         print(args)
         wandb.init(project='rnnlm', config=args)
 
-        for epoch in range(args.epochs):
-            self.train_one_epoch(epoch=epoch)
+        step = 0
+        try:
+            for epoch in range(args.epochs):
+                step = self.train_one_epoch(epoch=epoch, step=step)
+                torch.save(self.state_dict(), args.save)
+        finally:
             torch.save(self.state_dict(), args.save)
 
-    if args.complete:
-        self.model.eval()
-        prompt_score, completion = self.complete("\n" + args.complete, 1024, top_k=args.top_k)
-        print(prompt_score.item(), args.complete + completion)
+    for prompt_score, completion in zip(*self.evaluate()):
+        print('{:.2f}'.format(prompt_score), completion)
 
 if __name__ == '__main__':
     main()
