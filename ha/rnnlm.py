@@ -1,6 +1,5 @@
 from pathlib import Path
 import argparse
-import sys
 
 from rich.console import Console
 import torch
@@ -79,10 +78,10 @@ class System:
             extend_vocab = True
 
         if args.train:
-            if args.bytes_as_tokens:
-                self.data, self.vocab = tokenize_bytes(args.train, self.vocab, extend_vocab=extend_vocab)
-            else:
+            if args.vocab_from_data:
                 self.data, self.vocab = tokenize_chars(args.train, self.vocab, extend_vocab=extend_vocab)
+            else:
+                self.data, self.vocab = tokenize_bytes(args.train, self.vocab, extend_vocab=extend_vocab)
             self.dataset = SymbolTape(self.data, args.batch_size, args.bptt_len, pad_id=0)
 
             self.batches = torch.utils.data.DataLoader(
@@ -96,7 +95,6 @@ class System:
 
         if not self.vocab:
             self.vocab = Vocabulary.bytes()
-            args.bytes_as_tokens = True
 
         vocab_size = len(self.vocab.id_to_string)
 
@@ -121,10 +119,10 @@ class System:
         self.loss = nn.CrossEntropyLoss(ignore_index=0)
 
         self.log_interval = args.log_interval
-        if args.bytes_as_tokens:
-            self.prompts = [prompt.encode('utf-8') for prompt in args.complete]
-        else:
+        if args.vocab_from_data:
             self.prompts = args.complete
+        else:
+            self.prompts = [prompt.encode('utf-8') for prompt in args.complete]
         self.args = args
 
     def state_dict(self):
@@ -268,19 +266,19 @@ def main():
                     argparse.MetavarTypeHelpFormatter):
         pass
 
-    parser = argparse.ArgumentParser(formatter_class=Formatter)
+    parser = argparse.ArgumentParser(description="hal trains recurrent language models", formatter_class=Formatter)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--save', type=Path, default='rnnlm.pt', help="Path to save checkpoint to")
     parser.add_argument('--device', type=str, default='cuda:1', help='device')
-    parser.add_argument('--lr', default=0.0002, type=float, help='Adam learning rate')
+    parser.add_argument('--lr', default=0.002, type=float, help='Adam learning rate')
     parser.add_argument('--dropout', default=0, type=float, help='dropout rate')
     parser.add_argument('--epochs', default=1, type=int, help='number of training set iterations')
-    parser.add_argument('--max-steps', default=-1, type=int, help='maximum number of training steps (useful for e.g. lr search)')
-    parser.add_argument('--batch-size', default=4096, type=int, help='batch size')
-    parser.add_argument('--bptt-len', default=128, type=int, help='RNN window size')
-    parser.add_argument('--rnn-size', default=1024, type=int, help='RNN width')
+    parser.add_argument('--max-steps', default=-1, type=int, help='maximum number of training steps per epoch (useful for e.g. lr search)')
+    parser.add_argument('--batch-size', default=1280, type=int, help='batch size')
+    parser.add_argument('--bptt-len', default=256, type=int, help='RNN window size')
+    parser.add_argument('--rnn-size', default=2048, type=int, help='RNN width')
     parser.add_argument('--num-layers', default=1, type=int, help='RNN depth')
-    parser.add_argument('--bytes-as-tokens', action='store_true', help='use bytes as tokens')
+    parser.add_argument('--vocab-from-data', action='store_true', help='build character vocabulary from the data')
     parser.add_argument('--train', type=Path, help='Train model on this data')
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
@@ -302,7 +300,8 @@ def main():
             for epoch in range(args.epochs):
                 step = self.train_one_epoch(epoch=epoch, step=step)
                 torch.save(self.state_dict(), args.save)
-        finally:
+        except KeyboardInterrupt:
+            print('interrupted, saving')
             torch.save(self.state_dict(), args.save)
 
     for prompt_score, completion in zip(*self.evaluate()):
