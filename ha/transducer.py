@@ -1,6 +1,6 @@
 
 import torch
-from .scan import scanrec
+from .scan import scanrec, scanrec_log
 
 #@torch.jit.script
 def transducer_forward_score1(
@@ -41,7 +41,6 @@ def transducer_forward_score1(
     return alpha[T-1, U-1] * joint_probs[T-1, U-1, 0]
 
 
-
 def transducer_forward_score2(
     transcription_probs, # (T, K)  # f   # time starts at 0
     prediction_probs, # (U, K)     # g   # first symbol is blank (0)
@@ -74,6 +73,38 @@ def transducer_forward_score2(
     return alpha[T-1, U-1] * joint_probs[T-1, U-1, 0]
 
 
+def transducer_forward_score3(
+    transcription_probs, # (T, K)  # f   # time starts at 0
+    prediction_probs, # (U, K)     # g   # first symbol is blank (0)
+    targets # (U,)                 # y   # first symbol is blank (0)
+):
+    """Transducer forward score for a batch of sequences, using logits, flood fill style.
+
+    [Graves12] Sequence Transduction with Recurrent Neural Networks
+    """
+    T, K = transcription_probs.shape
+    U, K = prediction_probs.shape
+
+    joint = (transcription_probs[:, None, :] + prediction_probs[None, :, :]).log_softmax(dim=-1) # (T, U, K)
+
+    log_alpha = transcription_probs.new_full((T, U), torch.finfo(torch.float).min)
+
+    t = 0
+    from_bot = joint[t, :].gather(-1, targets[:, None])[:, 0]
+    from_bot = torch.cat((joint.new_zeros((1,)), from_bot[:-1]))
+    log_alpha[t, :] = torch.cumsum(from_bot, dim=0)
+
+    for t in range(1, T):
+        from_left = log_alpha[t-1, :].clone() + joint[t-1, :, 0]
+
+        from_bot = joint[t, :].gather(-1, targets[:, None])[:, 0]
+        from_bot = torch.cat((joint.new_zeros((1,)), from_bot[:-1]))
+
+        log_alpha[t, :] = scanrec_log(from_bot, from_left)
+
+    return log_alpha[T-1, U-1] + joint[T-1, U-1, 0]
+
+
 
 
 
@@ -92,9 +123,13 @@ def test_random():
     loss2 = transducer_forward_score2(transcription_probabilities, prediction_probabilities, targets)
     loss2.backward()
 
-    print(loss1, loss2)
+    loss3 = transducer_forward_score3(transcription_probabilities, prediction_probabilities, targets)
+    loss3.backward()
+
+    print(loss1.log(), loss2.log(), loss3)
 
     assert torch.allclose(loss1, loss2)
+    assert torch.allclose(loss2.log(), loss3)
 
 
 def _test_simple():
