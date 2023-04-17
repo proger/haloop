@@ -105,6 +105,36 @@ def transducer_forward_score3(
     return log_alpha[T-1, U-1] + joint[T-1, U-1, 0]
 
 
+def transducer_forward_score3_transposed(
+    transcription_probs, # (T, K)  # f   # time starts at 0
+    prediction_probs, # (U, K)     # g   # first symbol is blank (0)
+    targets # (U,)                 # y   # first symbol is blank (0)
+):
+    """Transducer forward score for a batch of sequences, using logits, flood fill style.
+
+    [Graves12] Sequence Transduction with Recurrent Neural Networks
+    """
+    T, K = transcription_probs.shape
+    U, K = prediction_probs.shape
+
+    joint = (transcription_probs[:, None, :] + prediction_probs[None, :, :]).log_softmax(dim=-1) # (T, U, K)
+
+    log_alpha = transcription_probs.new_full((T, U), torch.finfo(torch.float).min)
+
+    u = 0
+    from_left = joint[:, u, 0]
+    from_left = torch.cat((joint.new_zeros((1,)), from_left[:-1]))
+    log_alpha[:, u] = torch.cumsum(from_left, dim=0)
+
+    for u in range(1, U):
+        from_bot = log_alpha[:, u-1].clone() + joint[:, u-1, targets[u-1]]
+
+        from_left = joint[:, u, 0]
+        from_left = torch.cat((joint.new_zeros((1,)), from_left[:-1]))
+
+        log_alpha[:, u] = scanrec_log(from_left, from_bot)
+
+    return log_alpha[T-1, U-1] + joint[T-1, U-1, 0]
 
 
 
@@ -126,10 +156,14 @@ def test_random():
     loss3 = transducer_forward_score3(transcription_probabilities, prediction_probabilities, targets)
     loss3.backward()
 
-    print(loss1.log(), loss2.log(), loss3)
+    loss4 = transducer_forward_score3_transposed(transcription_probabilities, prediction_probabilities, targets)
+    loss4.backward()
+
+    print(loss1.log(), loss2.log(), loss3, loss4)
 
     assert torch.allclose(loss1, loss2)
     assert torch.allclose(loss2.log(), loss3)
+    assert torch.allclose(loss3, loss4)
 
 
 def _test_simple():
