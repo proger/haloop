@@ -234,7 +234,8 @@ class System:
 
             if i % self.log_interval == 0:
                 _, outputs = self.evaluate()
-                print(f"epoch {epoch} step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
+                train_bpc = loss.item() / math.log(2)
+                print(f"epoch {epoch} step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} bpc: {train_bpc:.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
                 wandb.log({'train/loss': loss.item(),
                            'train/ppl': loss.exp().item(),
                            'train/lr': self.args.lr,
@@ -294,6 +295,8 @@ To produce 10-token completions of two strings try:
 
 To compute BPC on evaluation data from files (first column is ignored) try:
 % hal --init librispeech-1024.pt --bptt-len 0 --rnn-size 1024 --complete-file LibriSpeech/dev-clean/*/*/*.txt
+
+␄
 """)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--save', type=Path, default='rnnlm.pt', help="Path to save checkpoint to")
@@ -335,7 +338,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 
     prompt_scores, outputs = self.evaluate()
     for prompt_score, output in zip(prompt_scores, outputs):
-        print('{:.2f}'.format(prompt_score), output)
+        print('{:.2f}'.format(prompt_score), 'bpc', output)
     print('mean bpc', torch.mean(prompt_scores).item())
 
 if __name__ == '__main__':
