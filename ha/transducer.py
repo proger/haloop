@@ -156,7 +156,7 @@ def transducer_forward_score4(
     log_alpha[:, u] = torch.cumsum(from_left, dim=0)
 
     for u in range(1, U1):
-        from_bot = log_alpha[:, u-1].clone() + joint[:, u-1, targets[u-1]]
+        from_bot = log_alpha[:, u-1] + joint[:, u-1, targets[u-1]]
 
         from_left = joint[:, u, 0]
         from_left = torch.cat((joint.new_zeros((1,)), from_left[:-1]))
