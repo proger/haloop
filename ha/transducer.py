@@ -1,5 +1,9 @@
 
+import math
+
 import torch
+import torch.nn.functional as F
+
 from .scan import scanrec, scanrec_log
 
 #@torch.jit.script
@@ -155,13 +159,15 @@ def transducer_forward_score4(
     from_left = torch.cat((joint.new_zeros((1,)), from_left[:-1]))
     log_alpha[:, u] = torch.cumsum(from_left, dim=0)
 
+    rounded_width = 2 ** round(math.log2(T))
+    trailing_pad = rounded_width - (T-1)
+
     for u in range(1, U1):
         from_bot = log_alpha[:, u-1] + joint[:, u-1, targets[u-1]]
+        from_left = joint[:-1, u, 0]
 
-        from_left = joint[:, u, 0]
-        from_left = torch.cat((joint.new_zeros((1,)), from_left[:-1]))
-
-        log_alpha[:, u] = scanrec_log(from_left, from_bot)
+        log_alpha[:, u] = scanrec_log(F.pad(from_left, (1, trailing_pad - 1)),
+                                      F.pad(from_bot,  (0, trailing_pad - 1)))[:T]
 
     return -(log_alpha[T-1, U1-1] + joint[T-1, U1-1, 0])
 
@@ -171,7 +177,7 @@ def test_torchaudio():
     torch.set_printoptions(precision=8, sci_mode=False, linewidth=200)
     torch.manual_seed(42)
 
-    transcription_probs = torch.randn(2, 6, requires_grad=True)
+    transcription_probs = torch.randn(7, 6, requires_grad=True)
     prediction_probs = torch.randn(5, 6, requires_grad=True)
     targets = torch.randint(0, 6, (4,)) # leading symbol is no longer blank
 
