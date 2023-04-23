@@ -104,7 +104,7 @@ def transducer_forward_score3(
         from_bot = joint[t, :].gather(-1, targets[:, None])[:, 0]
         from_bot = torch.cat((joint.new_zeros((1,)), from_bot[:-1]))
 
-        log_alpha[t, :] = scanrec_log(from_bot, from_left)
+        log_alpha[t, :] = scanrec_log(from_bot[None, :], from_left[None, :])
 
     return log_alpha[T-1, U-1] + joint[T-1, U-1, 0]
 
@@ -136,7 +136,7 @@ def transducer_forward_score3_transposed(
         from_left = joint[:, u, 0]
         from_left = torch.cat((joint.new_zeros((1,)), from_left[:-1]))
 
-        log_alpha[:, u] = scanrec_log(from_left, from_bot)
+        log_alpha[:, u] = scanrec_log(from_left[None, :], from_bot[None, :])
 
     return log_alpha[T-1, U-1] + joint[T-1, U-1, 0]
 
@@ -166,8 +166,8 @@ def transducer_forward_score4(
         from_bot = log_alpha[:, u-1] + joint[:, u-1, targets[u-1]]
         from_left = joint[:-1, u, 0]
 
-        log_alpha[:, u] = scanrec_log(F.pad(from_left, (1, trailing_pad - 1)),
-                                      F.pad(from_bot,  (0, trailing_pad - 1)))[:T]
+        log_alpha[:, u] = scanrec_log(F.pad(from_left, (1, trailing_pad - 1))[None, :],
+                                      F.pad(from_bot,  (0, trailing_pad - 1))[None, :])[0, :T]
 
     return -(log_alpha[T-1, U1-1] + joint[T-1, U1-1, 0])
 
