@@ -172,6 +172,68 @@ def transducer_forward_score4(
     return -(log_alpha[T-1, U1-1] + joint[T-1, U1-1, 0])
 
 
+def transducer_forward_score(
+    joint,  # (N, T, U+1, K)  # (f+g).log_softmax(dim=-1)   # time starts at 0, symbol 0 is blank
+    targets, # (N, U,)        # y                           # first symbol is first symbol from data
+    joint_lengths,
+    target_lengths
+):
+    """Transducer forward score for a batch of sequences.
+
+    [Graves12] Sequence Transduction with Recurrent Neural Networks
+    """
+    N, T, U1, K = joint.shape
+
+    log_alpha = joint.new_full((N, T, U1), torch.finfo(torch.float).min)
+
+    u = 0
+    from_left = joint[:, :, u, 0]
+    from_left = torch.cat((joint.new_zeros((N, 1,)), from_left[:, :-1]), dim=-1)
+    log_alpha[:, :, u] = torch.cumsum(from_left, dim=-1)
+
+    rounded_width = 2 ** round(math.log2(T))
+    trailing_pad = rounded_width - (T-1)
+
+    for u in range(1, U1):
+        from_bot = log_alpha[..., u-1] + joint[:, :, u-1, :].gather(-1, targets[:, u-1][:,None].expand(N,T)[:,:,None]).squeeze(-1)
+        from_left = joint[:, :-1, u, 0]
+
+        log_alpha[:, :, u] = scanrec_log(F.pad(from_left, (1, trailing_pad - 1)),
+                                         F.pad(from_bot,  (0, trailing_pad - 1)))[:, :T]
+
+    Ns = torch.arange(N)
+    return -(log_alpha[Ns, joint_lengths-1, target_lengths] + joint[Ns, joint_lengths-1, target_lengths, 0])
+
+
+
+def test_batched():
+    torch.set_default_dtype(torch.float32)
+    torch.set_printoptions(precision=8, sci_mode=False, linewidth=200)
+    torch.manual_seed(42)
+
+    transcription_probs = torch.randn(13, 7, 6, requires_grad=True)
+    prediction_probs = torch.randn(13, 5, 6, requires_grad=True)
+    targets = torch.randint(0, 6, (13, 4,)) # leading symbol is no longer blank
+    joint_lengths = torch.tensor([7]*13).to(torch.int32)
+    target_lengths = torch.tensor([4]*13).to(torch.int32)
+
+    joint = (transcription_probs[:, :, None, :] + prediction_probs[:, None, :, :]).log_softmax(dim=-1) # (N, T, U+1, K)
+
+    from torchaudio.functional import rnnt_loss
+    loss2 = rnnt_loss(joint, targets.to(torch.int32), joint_lengths, target_lengths,
+                      blank=0, reduction='sum', fused_log_softmax=False)
+    loss2.backward()
+
+    joint = (transcription_probs[:, :, None, :] + prediction_probs[:, None, :, :]).log_softmax(dim=-1) # (N, T, U+1, K)
+
+    loss3 = transducer_forward_score(joint, targets, joint_lengths, target_lengths)
+    loss3 = loss3.sum()
+    loss3.backward()
+
+    print(loss2, loss3)
+    assert torch.allclose(loss2, loss3)
+
+
 def test_torchaudio():
     torch.set_default_dtype(torch.float32)
     torch.set_printoptions(precision=8, sci_mode=False, linewidth=200)
@@ -196,9 +258,17 @@ def test_torchaudio():
                       blank=0, reduction='sum', fused_log_softmax=False)
     loss2.backward()
 
-    print(loss1, loss2)
+    loss3 = transducer_forward_score(joint[None, :],
+                                     targets[None, :],
+                                     torch.tensor([len(transcription_probs)]).to(torch.int32),
+                                     torch.tensor([len(targets)]).to(torch.int32))
+    loss3 = loss3.sum()
+    loss3.backward()
+
+    print(loss1, loss2, loss3)
 
     assert torch.allclose(loss1, loss2)
+    assert torch.allclose(loss2, loss3)
 
 
 def test_random():
@@ -228,6 +298,7 @@ def test_random():
     assert torch.allclose(loss1, loss2)
     assert torch.allclose(loss2.log(), loss3)
     assert torch.allclose(loss3, loss4)
+
 
 def _test_simple():
     transcription_probabilities = torch.tensor([[1.0, 0.0, 0.0, 0.0],
