@@ -13,6 +13,7 @@ import wandb
 from .data import concat_datasets
 from .beam import ctc_beam_search_decode_logits
 from .model import Encoder, CTCRecognizer, StarRecognizer
+from .resnet import FixupResNet, FixupBasicBlock
 from .xen import Vocabulary
 
 
@@ -37,7 +38,12 @@ class System(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        self.encoder = Encoder().to(args.device)
+        if args.encoder == 'lstm':
+            self.encoder = Encoder().to(args.device)
+        elif args.encoder == 'r9':
+            self.encoder = FixupResNet(FixupBasicBlock, [2,2,3]).to(args.device)
+        else:
+            raise ValueError(f'Unknown encoder {args.encoder}')
         self.vocabulary = Vocabulary(args.glottal_closures)
         if args.star_penalty is not None:
             self.recognizer = StarRecognizer(star_penalty=args.star_penalty,
@@ -180,7 +186,7 @@ def main():
     parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
-    parser.add_argument('--encoder', type=str, default='uni', choices=['uni', 'bi'], help="Encoder to use: unidirectional LSTM or bidirectional Transformer")
+    parser.add_argument('--encoder', type=str, default='lstm', choices=['lstm', 'r9'], help="Encoder to use: unidirectional LSTM or ResNet")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
@@ -206,7 +212,9 @@ def main():
         system.load_state_dict(checkpoint)
 
     if args.compile:
-        system = torch.compile(system, options={'trace.graph_diagram': True})
+        system = torch.compile(system, mode='reduce-overhead')
+
+    print('model parameters', sum(p.numel() for p in system.parameters() if p.requires_grad))
 
     if args.train:
         wandb.init(project='ha', config=args)
