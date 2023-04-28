@@ -122,7 +122,7 @@ class System:
         self.log_interval = args.log_interval
         self.args = args
 
-    def state_dict(self):
+    def make_state_dict(self):
         return {
             'args': vars(self.args),
             'vocab': self.vocab.state_dict(),
@@ -331,10 +331,10 @@ To compute BPC on evaluation data from files (first column is ignored) try:
         try:
             for epoch in range(args.epochs):
                 step = self.train_one_epoch(epoch=epoch, step=step)
-                torch.save(self.state_dict(), args.save)
+                torch.save(self.make_state_dict(), args.save)
         except KeyboardInterrupt:
             print('interrupted, saving')
-            torch.save(self.state_dict(), args.save)
+            torch.save(self.make_state_dict(), args.save)
 
     prompt_scores, outputs = self.evaluate()
     for prompt_score, output in zip(prompt_scores, outputs):
