@@ -59,7 +59,7 @@ class System(nn.Module):
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
 
-    def state_dict(self, **extra):
+    def make_state_dict(self, **extra):
         return {
             'encoder': self.encoder.state_dict(),
             'recognizer': self.recognizer.state_dict(),
@@ -171,7 +171,7 @@ class System(nn.Module):
         return valid_loss / count
 
 
-def main():
+def make_parser():
     class Formatter(argparse.ArgumentDefaultsHelpFormatter,
                     argparse.MetavarTypeHelpFormatter):
         pass
@@ -191,8 +191,11 @@ def main():
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     parser.add_argument('--glottal-closures', action='store_true', help="Add glotal closures to the vocabulary")
-    args = parser.parse_args()
+    return parser
 
+
+def main():
+    args = make_parser().parse_args()
     print(args)
 
     torch.manual_seed(3407)
@@ -236,7 +239,7 @@ def main():
             if valid_loss < best_valid_loss:
                 best_valid_loss = valid_loss
                 print('saving model', args.save)
-                torch.save(system.state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
+                torch.save(system.make_state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
     else:
         system.evaluate(-100, valid_loader)
 
