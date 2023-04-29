@@ -11,7 +11,7 @@ def make_frames(wav):
     # frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
     # frames += 8.
     # frames /= 4.
-    return frames
+    return frames # (T, F)
 
 
 class Directory(torch.utils.data.Dataset):
@@ -39,6 +39,36 @@ class LibriSpeech(torch.utils.data.Dataset):
     def __getitem__(self, index):
         wav, sr, text, speaker_id, chapter_id, utterance_id = self.librispeech[index]
         return make_frames(wav), text
+
+
+class Mask(torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        super().__init__()
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        frames, text = self.dataset[index]
+
+        frames = frames[None,None,:]
+
+        frames = torchaudio.functional.mask_along_axis_iid(
+            frames,
+            mask_param=2, # mask a little bit as we have only 13 components
+            mask_value=0,
+            axis=3 # frequency
+        )
+
+        frames = torchaudio.functional.mask_along_axis_iid(
+            frames,
+            mask_param=7,
+            mask_value=0,   
+            axis=2 # time
+        )
+
+        return frames[0, 0, :], text
 
 
 class WordDrop(torch.utils.data.Dataset):
@@ -72,6 +102,8 @@ def make_dataset(s):
             return WordDrop(make_dataset(subset), p_drop_words=0.4)
         case ['wdrop.1', subset]:
             return WordDrop(make_dataset(subset), p_drop_words=0.1)
+        case ['mask', subset]:
+            return Mask(make_dataset(subset))
 
 
 def concat_datasets(s):
