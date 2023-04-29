@@ -43,6 +43,15 @@ class Vocabulary:
 
         self.dictionary = {c: i for i, c in enumerate(self.rdictionary, start=1)}
 
+    def state_dict(self):
+        return {
+            'rdictionary': self.rdictionary,
+        }
+
+    def load_state_dict(self, state_dict):
+        self.rdictionary = state_dict['rdictionary']
+        self.dictionary = {c: i for i, c in enumerate(self.rdictionary, start=1)}
+
     def __len__(self):
         return len(self.rdictionary) + 1
 

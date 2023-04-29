@@ -15,6 +15,7 @@ from .beam import ctc_beam_search_decode_logits
 from .model import Encoder, CTCRecognizer, StarRecognizer
 from .resnet import FixupResNet, FixupBasicBlock
 from .xen import Vocabulary
+from . import symbol_tape
 
 
 console = Console()
@@ -38,18 +39,28 @@ class System(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
-        if args.encoder == 'lstm':
-            self.encoder = Encoder().to(args.device)
-        elif args.encoder == 'r9':
-            self.encoder = FixupResNet(FixupBasicBlock, [3,3,3]).to(args.device)
-        else:
-            raise ValueError(f'Unknown encoder {args.encoder}')
-        self.vocabulary = Vocabulary(args.glottal_closures)
-        if args.star_penalty is not None:
-            self.recognizer = StarRecognizer(star_penalty=args.star_penalty,
-                                             vocab_size=len(self.vocabulary)).to(args.device)
-        else:
-            self.recognizer = CTCRecognizer(vocab_size=len(self.vocabulary)).to(args.device)
+
+        match args.encoder:
+            case "lstm":
+                self.encoder = Encoder().to(args.device)
+            case "r9":
+                self.encoder = FixupResNet(FixupBasicBlock, [5,5,5]).to(args.device)
+
+        match args.vocab:
+            case "bytes":
+                self.vocab = symbol_tape.Vocabulary.bytes()
+            case "cmu":
+                self.vocab = Vocabulary(add_closures=True)
+            case "xen":
+                self.vocab = Vocabulary(add_closures=True)
+
+        match args.star_penalty:
+            case None:
+                self.recognizer = CTCRecognizer(vocab_size=len(self.vocab)).to(args.device)
+            case star_penalty:
+                self.recognizer = StarRecognizer(star_penalty=star_penalty,
+                                                 vocab_size=len(self.vocab)).to(args.device)    
+
         self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()), lr=args.lr)
         self.scaler = torch.cuda.amp.GradScaler()
 
@@ -58,6 +69,7 @@ class System(nn.Module):
         self.recognizer.load_state_dict(checkpoint['recognizer'])
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.vocab.load_state_dict(checkpoint['vocab'])
 
     def make_state_dict(self, **extra):
         return {
@@ -65,6 +77,7 @@ class System(nn.Module):
             'recognizer': self.recognizer.state_dict(),
             'scaler': self.scaler.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'vocab': self.vocab.state_dict(),
         } | extra
 
     def train_one_epoch(self, epoch, train_loader):
@@ -122,7 +135,7 @@ class System(nn.Module):
     @torch.inference_mode()
     def evaluate(self, epoch, valid_loader):
         device = self.args.device
-        encoder, recognizer, vocabulary = self.encoder, self.recognizer, self.vocabulary
+        encoder, recognizer, vocabulary = self.encoder, self.recognizer, self.vocab
 
         valid_loss = 0.
         lers = []
@@ -191,6 +204,7 @@ def make_parser():
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     parser.add_argument('--glottal-closures', action='store_true', help="Add glotal closures to the vocabulary")
+    parser.add_argument('--vocab', type=str, default='bytes', choices=['bytes', 'cmu', 'xen'], help="Vocabulary to use: raw bytes, CMUdict, Xen (CMUdict + glottal closures)")
     return parser
 
 
@@ -204,7 +218,7 @@ def main():
 
     valid_loader = torch.utils.data.DataLoader(
         concat_datasets(args.eval),
-        collate_fn=Collator(system.vocabulary),
+        collate_fn=Collator(system.vocab),
         batch_size=16,
         shuffle=False,
         num_workers=args.num_workers,
@@ -224,7 +238,7 @@ def main():
 
         train_loader = torch.utils.data.DataLoader(
             concat_datasets(args.train),
-            collate_fn=Collator(system.vocabulary),
+            collate_fn=Collator(system.vocab),
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=args.num_workers,
