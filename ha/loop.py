@@ -22,6 +22,7 @@ console = Console()
 def print(*args, flush=False, **kwargs):
     console.log(*args, **kwargs)
 
+
 class Collator:
     def __init__(self, vocabulary):
         self.vocabulary = vocabulary
@@ -50,7 +51,7 @@ class System(nn.Module):
             case "bytes":
                 self.vocab = symbol_tape.Vocabulary.bytes()
             case "cmu":
-                self.vocab = Vocabulary(add_closures=True)
+                self.vocab = Vocabulary(add_closures=False)
             case "xen":
                 self.vocab = Vocabulary(add_closures=True)
 
