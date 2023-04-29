@@ -43,8 +43,11 @@ class Vocabulary:
 
     # Given a string, return ID
     def get_idx(self, string, extend_vocab=False):
+        byte = bytes([ord(string)])
         if string in self.string_to_id:
             return self.string_to_id[string]
+        elif byte in self.string_to_id:
+            return self.string_to_id[byte]
         elif extend_vocab:  # add the new word
             self.add_new_word(string)
             return self.string_to_id[string]
