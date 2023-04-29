@@ -41,7 +41,7 @@ class System(nn.Module):
         if args.encoder == 'lstm':
             self.encoder = Encoder().to(args.device)
         elif args.encoder == 'r9':
-            self.encoder = FixupResNet(FixupBasicBlock, [2,2,3]).to(args.device)
+            self.encoder = FixupResNet(FixupBasicBlock, [3,3,3]).to(args.device)
         else:
             raise ValueError(f'Unknown encoder {args.encoder}')
         self.vocabulary = Vocabulary(args.glottal_closures)
