@@ -58,7 +58,10 @@ class Vocabulary:
         return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text])
 
     def decode(self, ids):
-        return ''.join([self.id_to_string[id] for id in ids])
+        if isinstance(self.id_to_string[0], bytes):
+            return b''.join([self.id_to_string[id] for id in ids])
+        else:
+            return ''.join([self.id_to_string[id] for id in ids])
 
     @classmethod
     def bytes(cls):
