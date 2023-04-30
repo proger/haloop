@@ -97,6 +97,8 @@ class System(nn.Module):
             input_lengths = input_lengths.to(device)
             target_lengths = target_lengths.to(device)
 
+            #print(inputs, targets) # works best with --batch-size 1
+
             input_lengths = encoder.subsampled_lengths(input_lengths)
 
             with torch.autocast(device_type='cuda', dtype=torch.float16):
