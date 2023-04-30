@@ -54,7 +54,7 @@ class LM(nn.Module):
 
         return output, state
 
-    def init_hidden(self, batch_size):
+    def init_hidden(self, batch_size=1):
         weight = self.out_layer.weight
         h = weight.new_zeros(self.num_layers, batch_size, self.hidden_dim)
         c = weight.new_zeros(self.num_layers, batch_size, self.hidden_dim)
@@ -137,7 +137,7 @@ class System:
         prompt_list = [self.vocab.string_to_id[char] if isinstance(char, str) else char for char in prompt]
         x = torch.tensor(prompt_list).to(device).unsqueeze(1).long()
 
-        return x, self.model.init_hidden(1)
+        return x, self.model.init_hidden()
 
     @torch.inference_mode()
     def complete(self, prompt, steps=512, top_k=1):
