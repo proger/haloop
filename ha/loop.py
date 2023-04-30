@@ -160,22 +160,35 @@ class System(nn.Module):
                 outputs = recognizer.log_probs(outputs)
                 for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, outputs, input_lengths):
                     seq = seq[:hyp_len].cpu()
+                    ref = ref[:ref_len].cpu().tolist()
                     #print('greedy', seq.argmax(dim=-1).tolist())
                     decoded = ctc_beam_search_decode_logits(seq)
                     hyp1 = vocabulary.decode(filter(None, decoded[0][0]))
-                    ref1 = vocabulary.decode(ref[:ref_len])
-                    hyp, ref = list(zip(*align(hyp1, ref1, '*')))
+                    ref1 = vocabulary.decode(ref)
 
                     dist = edit_distance(hyp1, ref1)
                     dist['length'] = len(ref1)
                     dist['ler'] = round(dist['total'] / dist['length'], 2)
-
-                    if i == 0:
-                        console.print('hyp', ' '.join(h.replace(' ', '_') for h in hyp), overflow='crop')
-                        console.print('ref', ' '.join(r.replace(' ', '_') for r in ref), overflow='crop')
-                        print(dist)
-
                     lers.append(dist['ler'])
+
+                    if isinstance(ref1, str):
+                        star = '*'
+                        hyp, ref = list(zip(*align(hyp1, ref1, star)))
+
+                        if i == 0:
+                            console.print('hyp', ' '.join(h.replace(' ', '_') for h in hyp), overflow='crop')
+                            console.print('ref', ' '.join(r.replace(' ', '_') for r in ref), overflow='crop')
+                            print(dist)
+                    else:
+                        star = 42 # b'*'
+                        hyp, ref = list(zip(*align(hyp1, ref1, star)))
+                        hyp, ref = bytes(hyp), bytes(ref)
+
+                        if i == 0:
+                            console.print('hyp', hyp)
+                            console.print('ref', ref)
+                            print(dist)
+
 
         count = i + 1
         ler = round(sum(lers) / len(lers), 3)
@@ -228,6 +241,8 @@ def main():
     if args.init:
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
+    else:
+        print('initializing randomly')
 
     if args.compile:
         system = torch.compile(system, mode='reduce-overhead')
