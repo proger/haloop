@@ -51,8 +51,8 @@ class CTCRecognizer(nn.Module):
         with torch.autocast(device_type='cuda', dtype=torch.float32):
             logits = self.log_probs(features).to(torch.float32)
             logits = logits.permute(1, 0, 2) # T, N, C
-            #loss = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
-            loss = ctc_reduce_mean(ctc_forward_score3(logits, targets, input_lengths, target_lengths), target_lengths)
+            loss = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+            #loss = ctc_reduce_mean(ctc_forward_score3(logits, targets, input_lengths, target_lengths), target_lengths)
             return loss
 
 
