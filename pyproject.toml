@@ -38,6 +38,7 @@ Source = "https://github.com/proger/ha1"
 [project.scripts]
 hac = "ha.loop:main"
 hal = "ha.rnnlm:main"
+hat = "ha.attention:main"
 
 [tool.hatch.version]
 path = "ha/__about__.py"
