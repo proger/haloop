@@ -88,7 +88,7 @@ class System(nn.Module):
         self.encoder.load_state_dict(checkpoint['encoder'])
         self.recognizer.load_state_dict(checkpoint['recognizer'])
         self.scaler.load_state_dict(checkpoint['scaler'])
-        #self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.vocab.load_state_dict(checkpoint['vocab'])
         if self.lm is not None:
             print('loading transducer lm')
@@ -177,9 +177,9 @@ class System(nn.Module):
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(),
-                                                             recognizer.parameters(),
-                                                             self.lm.parameters()), 0.1)
+            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), 0.1)
+            if self.lm:
+                grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), 0.1))
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
                 print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
