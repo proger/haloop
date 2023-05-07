@@ -2,13 +2,28 @@
 
 [![PyPI Version](https://img.shields.io/pypi/v/haloop.svg)](https://pypi.python.org/pypi/haloop)
 
-Haloop provides `hac` program for acoustic model training and `hal` for language model. It is available on PyPI:
+Haloop is a speech agent toolkit. Haloop provides `hac` program for acoustic model training, `hal` for RNN language model training and evaluation and `hat` for attention decoder LM. The package is available on PyPI:
 
 ```
 pip install haloop
 ```
 
-Haloop also provides a REPL for GPT-2 models from the paper [GPT-2 Metadata Pretraining Towards Instruction Finetuning for Ukrainian](https://github.com/proger/uk4b) using the `hat` program.
+Currently, `hat` is a REPL for Ukrainian GPT-2 models from the paper [GPT-2 Metadata Pretraining Towards Instruction Finetuning for Ukrainian](https://github.com/proger/uk4b).
+
+To use `hat`, install some additional dependencies and models:
+
+```
+pip install bitsandbytes sentencepiece
+
+wget https://a.wilab.org.ua/gpt/wiki.model  # sentencepiece tokenizer
+wget https://a.wilab.org.ua/gpt/ckpt10m.pt  # model checkpoint for GPT-2 Large
+```
+
+Now, kick start the REPL:
+
+```
+hat --spm wiki.model ckpt10m.pt
+```
 
 Please cite:
 
