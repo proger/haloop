@@ -142,17 +142,18 @@ class System(nn.Module):
 
                 from torchaudio.functional import rnnt_loss
                 loss = rnnt_loss(joint,
-                                    targets.to(torch.int32),
-                                    input_lengths.to(torch.int32),
-                                    target_lengths.to(torch.int32),
-                                    blank=0, reduction='mean', fused_log_softmax=True)
+                                 targets.to(torch.int32),
+                                 input_lengths.to(torch.int32),
+                                 target_lengths.to(torch.int32),
+                                 blank=0, reduction='mean', fused_log_softmax=True)
+                logits = joint # FIXME:
             else:
                 #
                 # All outputs are independent
                 #
-                loss = self.recognizer(outputs, targets, input_lengths, target_lengths)
+                loss, logits = self.recognizer(outputs, targets, input_lengths, target_lengths)
 
-        return loss, outputs
+        return loss, outputs, logits
 
     def train_one_epoch(self, epoch, train_loader):
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
@@ -164,7 +165,7 @@ class System(nn.Module):
         train_loss = 0.
         t0 = time.time()
         for i, (inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
-            loss, _ = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
                 print(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
@@ -209,17 +210,19 @@ class System(nn.Module):
         encoder.eval()
         recognizer.eval()
         for i, (inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
-            loss, outputs = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, outputs, logits = self.forward(inputs, targets, input_lengths, target_lengths)
 
             valid_loss += loss.item()
 
             if i < 10:
-                for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, outputs, input_lengths):
+                for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, logits, input_lengths):
                     seq = seq[:hyp_len].cpu()
                     ref = ref[:ref_len].cpu().tolist()
-                    #print('greedy', seq.argmax(dim=-1).tolist())
-                    decoded = ctc_beam_search_decode_logits(seq)
-                    hyp1 = vocabulary.decode(filter(None, decoded[0][0]))
+                    ali = seq.argmax(dim=-1).tolist()
+                    #import ipdb; ipdb.set_trace()
+                    decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq)
+                    ali = vocabulary.decode(ali)
+                    hyp1 = vocabulary.decode(filter(None, decoded_seqs[0]))
                     ref1 = vocabulary.decode(ref)
 
                     dist = edit_distance(hyp1, ref1)
@@ -234,6 +237,7 @@ class System(nn.Module):
                         if i == 0:
                             console.print('hyp', ' '.join(h.replace(' ', '_') for h in hyp), overflow='crop')
                             console.print('ref', ' '.join(r.replace(' ', '_') for r in ref), overflow='crop')
+                            console.print('ali', ali, overflow='crop')
                             print(dist)
                     else:
                         star = 42 # b'*'
@@ -243,6 +247,7 @@ class System(nn.Module):
                         if i == 0:
                             console.print('hyp', hyp)
                             console.print('ref', ref)
+                            console.print('ali', ali)
                             print(dist)
 
 
