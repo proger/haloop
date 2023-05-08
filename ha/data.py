@@ -8,9 +8,14 @@ from kaldialign import align
 def make_frames(wav):
     frames = torchaudio.compliance.kaldi.mfcc(wav)
 
+    # utterance-level CMVN
+    frames -= frames.mean(dim=0)
+    frames /= frames.std(dim=0)
+
     # frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
     # frames += 8.
     # frames /= 4.
+
     return frames # (T, F)
 
 
