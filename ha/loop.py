@@ -178,9 +178,9 @@ class System(nn.Module):
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), 0.1)
+            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), args.clip_grad_norm)
             if self.lm:
-                grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), 0.1))
+                grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), self.args.clip_grad_norm))
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
                 print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
@@ -280,6 +280,7 @@ def make_parser():
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     parser.add_argument('--vocab', type=str, default='bytes', choices=['bytes', 'cmu', 'xen'], help="Vocabulary to use: raw bytes, CMUdict, Xen (CMUdict + glottal closures)")
     parser.add_argument('--lm', type=Path, help="Path to language model checkpoint trained with hal.")
+    parser.add_argument('--clip-grad-norm', type=float, default=0.1, help="Clip gradient norm to this value")
     return parser
 
 
