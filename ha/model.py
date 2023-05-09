@@ -31,7 +31,7 @@ class Encoder(nn.Module):
 
 
 class CTCRecognizer(nn.Module):
-    def __init__(self, feat_dim=1024, vocab_size=55+1):
+    def __init__(self, feat_dim=1024, vocab_size=256):
         super().__init__()
         self.ctc = nn.CTCLoss(blank=0)
         self.classifier = nn.Linear(feat_dim, vocab_size)
@@ -49,11 +49,11 @@ class CTCRecognizer(nn.Module):
             target_lengths = torch.full((features.shape[0],), len(targets), dtype=torch.long)
 
         with torch.autocast(device_type='cuda', dtype=torch.float32):
-            logits = self.log_probs(features).to(torch.float32)
-            logits = logits.permute(1, 0, 2) # T, N, C
-            loss = self.ctc(logits, targets, input_lengths=input_lengths, target_lengths=target_lengths)
+            logits = self.log_probs(features)
+            logits1 = logits.to(torch.float32).permute(1, 0, 2) # T, N, C
+            loss = self.ctc(logits1, targets, input_lengths=input_lengths, target_lengths=target_lengths)
             #loss = ctc_reduce_mean(ctc_forward_score3(logits, targets, input_lengths, target_lengths), target_lengths)
-            return loss
+            return loss, logits
 
 
 class StarRecognizer(nn.Module):
