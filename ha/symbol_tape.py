@@ -5,7 +5,7 @@ import math
 
 
 class Vocabulary:
-    def __init__(self, pad_token="<pad>", unk_token='<unk>'):
+    def __init__(self, pad_token="·", unk_token="∞"):
         self.id_to_string = {}
         self.string_to_id = {}
 
@@ -64,12 +64,12 @@ class Vocabulary:
             return ''.join([self.id_to_string[id] for id in ids])
 
     @classmethod
-    def bytes(cls):
+    def bytes(cls, n=256):
         self = Vocabulary(pad_token=0, unk_token=7)
         self.id_to_string = {}
         self.string_to_id = {}
 
-        for x in range(256):
+        for x in range(n):
             byte = bytes([x])
             y = self.get_idx(byte, extend_vocab=True)
             assert x == y
