@@ -66,3 +66,5 @@ class Vocabulary:
     def decode(self, labels):
         return ['' if l == 0 else self.rdictionary[l-1] for l in labels]
 
+    def format(self, string):
+        return ' '.join(c.replace(' ', '_') for c in string)

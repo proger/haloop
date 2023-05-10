@@ -2,8 +2,8 @@ import argparse
 import time
 from itertools import chain
 from pathlib import Path
+import sys
 
-from rich.console import Console
 import torch
 import torch.nn as nn
 import torch.utils.data
@@ -20,9 +20,9 @@ from .rnnlm import LM
 from .transducer import transducer_forward_score
 from .ctc import ctc_reduce_mean
 
-console = Console()
-def print(*args, flush=False, **kwargs):
-    console.log(*args, **kwargs)
+
+def log(*args, flush=False, **kwargs):
+    print(*args, **kwargs, flush=flush, file=sys.stderr)
 
 
 class Collator:
@@ -30,12 +30,13 @@ class Collator:
         self.vocabulary = vocabulary
 
     def __call__(self, batch):
-        input_lengths = torch.tensor([len(b[0]) for b in batch])
-        inputs = torch.nn.utils.rnn.pad_sequence([b[0] for b in batch], batch_first=True)
-        targets = [self.vocabulary.encode(b[1]) for b in batch]
+        batch_indices = torch.tensor([b[0] for b in batch])
+        input_lengths = torch.tensor([len(b[1]) for b in batch])
+        inputs = torch.nn.utils.rnn.pad_sequence([b[1] for b in batch], batch_first=True)
+        targets = [self.vocabulary.encode(b[2]) for b in batch]
         target_lengths = torch.tensor([len(t) for t in targets])
-        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
-        return inputs, targets, input_lengths, target_lengths
+        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=-100)
+        return batch_indices, inputs, targets, input_lengths, target_lengths
 
 
 class System(nn.Module):
@@ -52,6 +53,8 @@ class System(nn.Module):
         match args.vocab:
             case "bytes":
                 self.vocab = symbol_tape.Vocabulary.bytes()
+            case "ascii":
+                self.vocab = symbol_tape.Vocabulary.ascii()
             case "cmu":
                 self.vocab = Vocabulary(add_closures=False)
             case "xen":
@@ -91,7 +94,7 @@ class System(nn.Module):
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.vocab.load_state_dict(checkpoint['vocab'])
         if self.lm is not None:
-            print('loading transducer lm')
+            log('loading transducer lm')
             self.lm.load_state_dict(checkpoint['lm'])
 
     def make_state_dict(self, **extra):
@@ -114,7 +117,7 @@ class System(nn.Module):
         input_lengths = input_lengths.to(device) # (N,)
         target_lengths = target_lengths.to(device) # (N,)
 
-        #print(inputs, targets) # works best with --batch-size 1
+        #log(inputs, targets) # works best with --batch-size 1
 
         input_lengths = self.encoder.subsampled_lengths(input_lengths)
 
@@ -164,25 +167,25 @@ class System(nn.Module):
 
         train_loss = 0.
         t0 = time.time()
-        for i, (inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
+        for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
-                print(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
+                log(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
                 scaler.update()
                 continue
 
             if torch.isinf(loss):
-                print(f'[{epoch + 1}, {i + 1:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
+                log(f'[{epoch + 1}, {i + 1:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
                 continue
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), args.clip_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), self.args.clip_grad_norm)
             if self.lm:
                 grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), self.args.clip_grad_norm))
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
-                print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
+                log(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 continue
@@ -195,7 +198,7 @@ class System(nn.Module):
             if i and i % self.args.log_interval == 0:
                 train_loss = train_loss / self.args.log_interval
                 t1 = time.time()
-                print(f'[{epoch + 1}, {i + 1:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f}', flush=True)
+                log(f'[{epoch + 1}, {i + 1:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f}', flush=True)
                 wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm})
                 t0 = t1
                 train_loss = 0.
@@ -209,51 +212,48 @@ class System(nn.Module):
 
         encoder.eval()
         recognizer.eval()
-        for i, (inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
+        for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
             loss, outputs, logits = self.forward(inputs, targets, input_lengths, target_lengths)
 
             valid_loss += loss.item()
 
-            if i < 10:
-                for ref, ref_len, seq, hyp_len in zip(targets, target_lengths, logits, input_lengths):
-                    seq = seq[:hyp_len].cpu()
-                    ref = ref[:ref_len].cpu().tolist()
-                    ali = seq.argmax(dim=-1).tolist()
-                    #import ipdb; ipdb.set_trace()
-                    decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq)
-                    ali = vocabulary.decode(ali)
-                    hyp1 = vocabulary.decode(filter(None, decoded_seqs[0]))
-                    ref1 = vocabulary.decode(ref)
+            for dataset_index, ref, ref_len, seq, hyp_len in zip(dataset_indices, targets, target_lengths, logits, input_lengths):
+                seq = seq[:hyp_len].cpu()
+                ref = ref[:ref_len].cpu().tolist()
+                ali = seq.argmax(dim=-1)
 
-                    dist = edit_distance(hyp1, ref1)
-                    dist['length'] = len(ref1)
-                    dist['ler'] = round(dist['total'] / dist['length'], 2)
-                    lers.append(dist['ler'])
+                greedy = [i for i in torch.unique_consecutive(ali, dim=-1).tolist() if i]
+                hyp1 = vocabulary.decode(greedy)
 
-                    if isinstance(ref1, str):
-                        star = '*'
-                        hyp, ref = list(zip(*align(hyp1, ref1, star)))
+                #decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq) # FIXME: too slow
+                #hyp1 = vocabulary.decode(filter(None, decoded_seqs[0]))
 
-                        if i == 0:
-                            console.print('hyp', ' '.join(h.replace(' ', '_') for h in hyp), overflow='crop')
-                            console.print('ref', ' '.join(r.replace(' ', '_') for r in ref), overflow='crop')
-                            console.print('ali', ali, overflow='crop')
-                            print(dist)
-                    else:
-                        star = 42 # b'*'
-                        hyp, ref = list(zip(*align(hyp1, ref1, star)))
-                        hyp, ref = bytes(hyp), bytes(ref)
+                ref1 = vocabulary.decode(ref)
+                ali = vocabulary.decode(ali.tolist())
 
-                        if i == 0:
-                            console.print('hyp', hyp)
-                            console.print('ref', ref)
-                            console.print('ali', ali)
-                            print(dist)
+                dist = edit_distance(hyp1, ref1)
+                dist['length'] = len(ref1)
+                dist['ler'] = round(dist['total'] / dist['length'], 2)
+                lers.append(dist['ler'])
 
+                if isinstance(ref1, str):
+                    star = '␣'
+                    hyp, ref = list(zip(*align(hyp1, ref1, star)))
+                    hyp, ref = ''.join(hyp), ''.join(ref)
+                else:
+                    star = 42 # b'*'
+                    hyp, ref = list(zip(*align(hyp1, ref1, star)))
+                    hyp, ref = bytes(hyp), bytes(ref)
+
+                dataset_index = dataset_index.item()
+                print(epoch, dataset_index, 'hyp', self.vocab.format(hyp), sep="\t", flush=True)
+                print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
+                print(epoch, dataset_index, 'ali', self.vocab.format(ali), sep="\t", flush=True)
+                print(epoch, dataset_index, 'stat', dist, sep="\t", flush=True)
 
         count = i + 1
         ler = round(sum(lers) / len(lers), 3)
-        print(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} sample ler: {ler:.3f}', flush=True)
+        log(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f}', flush=True)
         if wandb.run is not None:
             wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler})
         return valid_loss / count
@@ -278,7 +278,7 @@ def make_parser():
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
-    parser.add_argument('--vocab', type=str, default='bytes', choices=['bytes', 'cmu', 'xen'], help="Vocabulary to use: raw bytes, CMUdict, Xen (CMUdict + glottal closures)")
+    parser.add_argument('--vocab', type=str, default='ascii', choices=['bytes', 'ascii', 'cmu', 'xen'], help="Vocabulary to use: raw bytes, ascii, CMUdict, Xen (CMUdict + glottal closures)")
     parser.add_argument('--lm', type=Path, help="Path to language model checkpoint trained with hal.")
     parser.add_argument('--clip-grad-norm', type=float, default=0.1, help="Clip gradient norm to this value")
     return parser
@@ -286,7 +286,7 @@ def make_parser():
 
 def main():
     args = make_parser().parse_args()
-    print(args)
+    log(args)
 
     torch.manual_seed(3407)
 
@@ -304,12 +304,12 @@ def main():
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
     else:
-        print('initializing randomly')
+        log('initializing randomly')
 
     if args.compile:
         system = torch.compile(system, mode='reduce-overhead')
 
-    print('model parameters', sum(p.numel() for p in system.parameters() if p.requires_grad))
+    log('model parameters', sum(p.numel() for p in system.parameters() if p.requires_grad))
 
     if args.train:
         wandb.init(project='ha', config=args)
@@ -330,7 +330,7 @@ def main():
             valid_loss = system.evaluate(epoch, valid_loader)
             if valid_loss < best_valid_loss:
                 best_valid_loss = valid_loss
-                print('saving model', args.save)
+                log('saving model', args.save)
                 torch.save(system.make_state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
     else:
         system.evaluate(-100, valid_loader)

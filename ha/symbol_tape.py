@@ -40,22 +40,29 @@ class Vocabulary:
     def add_new_word(self, string):
         self.string_to_id[string] = len(self.string_to_id)
         self.id_to_string[len(self.id_to_string)] = string
+        return self.string_to_id[string]
 
     # Given a string, return ID
     def get_idx(self, string, extend_vocab=False):
-        byte = bytes([ord(string)])
+        try:
+            byte = bytes([ord(string)])
+            if byte in self.string_to_id:
+                return self.string_to_id[byte]
+        except ValueError:
+            pass
+
         if string in self.string_to_id:
             return self.string_to_id[string]
-        elif byte in self.string_to_id:
-            return self.string_to_id[byte]
         elif extend_vocab:  # add the new word
-            self.add_new_word(string)
-            return self.string_to_id[string]
+            return self.add_new_word(string)
         else:
             return self.unk_id
 
     def encode(self, text, extend_vocab=False):
-        return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text])
+        try:
+            return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text])
+        except:
+            import ipdb; ipdb.set_trace()
 
     def decode(self, ids):
         if isinstance(self.id_to_string[0], bytes):
@@ -71,7 +78,7 @@ class Vocabulary:
 
         for x in range(n):
             byte = bytes([x])
-            y = self.get_idx(byte, extend_vocab=True)
+            y = self.add_new_word(byte)
             assert x == y
             if x == 0: # nul
                 self.pad_id = x
@@ -79,6 +86,30 @@ class Vocabulary:
                 self.unk_id = x
 
         return self
+
+    @classmethod
+    def ascii(cls):
+        self = Vocabulary(pad_token=0, unk_token=7)
+        self.id_to_string = {}
+        self.string_to_id = {}
+
+        for i, x in enumerate("""ε␁␂␃␄␅␆␇␈␉␤⇥␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\ ]^_`abcdefghijklmnopqrstuvwxyz{|}~␡"""):
+            y = self.add_new_word(x)
+            assert y == i
+            if i == 0: # nul
+                self.pad_id = x
+            elif i == 7: # bel
+                self.unk_id = x
+
+        return self
+
+    def format(self, s):
+        if isinstance(s, bytes):
+            try:
+                s = s.decode('utf-8')
+            except UnicodeDecodeError:
+                pass
+        return s
 
 
 def tokenize_bytes(text_file, vocab, extend_vocab=False, device='cpu'):

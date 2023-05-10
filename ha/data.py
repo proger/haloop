@@ -27,10 +27,13 @@ class Directory(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.files)
 
+    def utt_id(self, index):
+        return self.files[index].stem
+
     def __getitem__(self, index):
         wav, sr = torchaudio.load(self.files[index])
         assert sr == 16000
-        return make_frames(wav), "the quick brown fox jumps over the lazy dog"
+        return index, make_frames(wav), "the quick brown fox jumps over the lazy dog"
 
 
 class LibriSpeech(torch.utils.data.Dataset):
@@ -41,9 +44,14 @@ class LibriSpeech(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.librispeech)
 
+    def utt_id(self, index):
+        wav, sr, text, speaker_id, chapter_id, utterance_id = self.librispeech[index]
+        utt_id = f'{speaker_id}-{chapter_id}-{utterance_id}'
+        return utt_id
+
     def __getitem__(self, index):
         wav, sr, text, speaker_id, chapter_id, utterance_id = self.librispeech[index]
-        return make_frames(wav), text
+        return index, make_frames(wav), text
 
 
 class Mask(torch.utils.data.Dataset):
@@ -54,8 +62,11 @@ class Mask(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def utt_id(self, index):
+        return self.dataset.utt_id(index)
+
     def __getitem__(self, index):
-        frames, text = self.dataset[index]
+        index, frames, text = self.dataset[index]
 
         frames = frames[None,None,:]
 
@@ -73,7 +84,7 @@ class Mask(torch.utils.data.Dataset):
             axis=2 # time
         )
 
-        return frames[0, 0, :], text
+        return index, frames[0, 0, :], text
 
 
 class WordDrop(torch.utils.data.Dataset):
@@ -85,8 +96,11 @@ class WordDrop(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
+    def utt_id(self, index):
+        return self.dataset.utt_id(index)
+
     def __getitem__(self, index):
-        frames, original_text = self.dataset[index]
+        index, frames, original_text = self.dataset[index]
         generator = torch.Generator().manual_seed(index)
         text = ' '.join(w for w in original_text.split(' ') if torch.rand(1, generator=generator) > self.p_drop_words)
         if not text:
@@ -94,7 +108,7 @@ class WordDrop(torch.utils.data.Dataset):
         if False:
             hyp, _ref = list(zip(*align(text.split(), original_text.split(), '*')))
             print(index, ' '.join(h.replace(' ', '_') for h in hyp))
-        return frames, text
+        return index, frames, text
 
 
 def make_dataset(s):
