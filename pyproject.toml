@@ -27,6 +27,7 @@ dependencies = [
   "rich",
   "torch",
   "torchaudio",
+  "wandb",
 ]
 dynamic = ["version"]
 
