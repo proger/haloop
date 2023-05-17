@@ -46,14 +46,18 @@ class MonitoredCausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
 
-    def forward(self, x):
+    def forward(self, x, past=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k ,v  = self.c_attn(x).split(self.n_embd, dim=2)
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        if past is not None:
+            k_cache, v_cache = past
+            k, v = torch.cat([k_cache, k], dim=2), torch.cat([v_cache, v], dim=-2)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
@@ -72,7 +76,7 @@ class MonitoredCausalSelfAttention(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y, att_entropy
+        return y, att_entropy, torch.stack([k, v])
 
 
 class MLP(nn.Module):
@@ -98,11 +102,11 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x_attn, att_entropy = self.attn(self.ln_1(x))
+    def forward(self, x, past=None):
+        x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past)
         x = x + x_attn
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, att_entropy, present
 
 
 class GPT(nn.Module):
@@ -132,22 +136,34 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
-    def forward(self, input_ids):
+    def forward(self,
+                input_ids, # (B, T)
+                past=None # (nlayers, 2, B, nh, T, hs)
+                ):
         device = input_ids.device
         b, t = input_ids.size()
+        if past is None:
+            t0 = 0
+            past = torch.zeros(self.config.n_layer, 2, b, self.config.n_head, t0, self.config.n_embd // self.config.n_head, device=device)
+        else:
+            t0 = past.size(-2)
+            t = t0 + t
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+
+        pos = torch.arange(t0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
 
         tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
+
+        present = past.new_empty((self.config.n_layer, 2, b, self.config.n_head, t, self.config.n_embd // self.config.n_head))
+        for i, block in enumerate(self.transformer.h):
+            x, _att_entropy, present[i] = block(x, past=past[i])
         x = self.transformer.ln_f(x)
 
         logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
 
-        return logits
+        return logits, present
 
 
 @torch.inference_mode()
@@ -157,11 +173,22 @@ def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, stop_
     the sequence max_new_tokens times, feeding the predictions back into the model each time.
     Most likely you'll want to make sure to be in model.eval() mode of operation for this.
     """
+    past = None
     for _ in range(max_new_tokens):
-        # if the sequence context is growing too long we must crop it at block_size
-        input_ids_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
-        # forward the model to get the logits for the index in the sequence
-        logits = self(input_ids_cond)
+        if input_ids.size(1) >= self.config.block_size:
+            # kv cache becomes useless here, we stop using and updating it
+            past = None
+            # if the past context is growing too long we must crop it at block_size
+            input_ids_cond = input_ids[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            logits, _ = self(input_ids_cond, past=None)
+        elif past is None:
+            # forward the condition for the first time and warm up the cache
+            logits, past = self(input_ids, past=None)
+        else:
+            # forward the last token in the sequence along with the cache
+            logits, past = self(input_ids[:, [-1]], past=past)
+
         # pluck the logits at the final step and scale by desired temperature
         logits = logits[:, -1, :] / temperature
         # optionally crop the logits to only the top k options
