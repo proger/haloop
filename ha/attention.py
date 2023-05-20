@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from . import lora
 
 def new_gelu(x):
     """
@@ -259,7 +260,12 @@ def main():
         gptconf = GPTConfig(**checkpoint['model_args'])
         model = nn.ModuleDict({'_orig_mod': GPT(gptconf)})
         model.load_state_dict(checkpoint['model'], strict=False)
-    else:        
+    elif '_orig_mod.transformer.h.0.attn.c_attn.lora_A.weight' in checkpoint['model']:
+        gptconf = GPTConfig(**checkpoint['model_args'])
+        model = nn.ModuleDict({'_orig_mod': GPT(gptconf)})
+        lora.attach_to_c_attn(model)
+        model.load_state_dict(checkpoint['model'])
+    else:
         gptconf = GPTConfig(**checkpoint['model_args'])
         model = nn.ModuleDict({'_orig_mod': GPT(gptconf)})
         model.load_state_dict(checkpoint['model'])
