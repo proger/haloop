@@ -200,6 +200,7 @@ def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, stop_
         probs = F.softmax(logits, dim=-1)
         # sample from the distribution
         input_ids_next = torch.multinomial(probs, num_samples=1)
+
         if input_ids_next == stop_token:
             # time to stop
             break
@@ -207,7 +208,7 @@ def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, stop_
             # append sampled index to the running sequence and continue
             input_ids = torch.cat((input_ids, input_ids_next), dim=1)
 
-    return input_ids
+        yield input_ids_next
 
 
 @dataclass
@@ -222,33 +223,8 @@ class GPTConfig:
     stable_embedding: bool = False
 
 
-@torch.inference_mode()
-def main():
-    import argparse
-    from rich.prompt import Prompt
-
-    try:
-        import sentencepiece as spm
-    except ImportError:
-        print("Please install sentencepiece with: pip install sentencepiece", file=sys.stderr)
-        raise
-
-    parser = argparse.ArgumentParser('GPT REPL')
-    parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--seed', type=int, default=1337)
-    parser.add_argument('--steps', type=int, default=1024)
-    parser.add_argument('--spm', type=str, required=True)
-    parser.add_argument('--top-k', type=int, default=5)
-    parser.add_argument('--temperature', type=float, default=0.8)
-    parser.add_argument('ckpt_path')
-    args = parser.parse_args()
-
-    device = args.device
-    torch.manual_seed(args.seed)
-    torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
-    torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
-
-    checkpoint = torch.load(args.ckpt_path, map_location=device)
+def load_model(ckpt_path, *, map_location):
+    checkpoint = torch.load(ckpt_path, map_location=map_location)
 
     if not 'vocab_size' in checkpoint['model_args']:
         # assume checkpoint for a large model
@@ -271,28 +247,62 @@ def main():
         model.load_state_dict(checkpoint['model'])
 
     model.eval()
-    model.to(device)
+    model.to(map_location)
     model = model._orig_mod
 
+    return model
+
+
+@torch.inference_mode()
+def main():
+    import argparse
+    from rich.prompt import Prompt
+
+    try:
+        import sentencepiece as spm
+    except ImportError:
+        print("Please install sentencepiece with: pip install sentencepiece", file=sys.stderr)
+        raise
+
+    parser = argparse.ArgumentParser('GPT REPL')
+    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--seed', type=int, default=1337)
+    parser.add_argument('--steps', type=int, default=10)
+    parser.add_argument('--spm', type=str, required=True)
+    parser.add_argument('--top-k', type=int, default=1)
+    parser.add_argument('--temperature', type=float, default=1.0)
+    parser.add_argument('ckpt_path')
+    args = parser.parse_args()
+
+    device = args.device
+    torch.manual_seed(args.seed)
+    torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
+    torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
+
+    model = load_model(args.ckpt_path, map_location=device)
+
     sp = spm.SentencePieceProcessor(model_file=args.spm)
+
+    import time
 
     while True:
         prompt = Prompt.ask('prompt>-')
         start = [50256] + sp.encode(prompt)
         x = (torch.tensor(start, dtype=torch.long, device=device)[None, ...])
 
+        t0 = time.time()
+
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            y = generate(model, x, args.steps, temperature=args.temperature, top_k=args.top_k)
+            for i, token_id in enumerate(generate(model, x, args.steps, temperature=args.temperature, top_k=args.top_k)):
+                token_id = token_id.item()
+                piece = sp.id_to_piece(token_id)
+                if piece.startswith('▁'):
+                    print(' ', end='')
+                    piece = piece[1:]
+                print(piece, end='', flush=True)
 
-        y = y[0].tolist()
-        _prefix, gen = y[:len(start)], y[len(start):]
-        try:
-            eot = gen.index(50256)
-            gen = gen[:eot]
-        except ValueError:
-            pass
-
-        print(sp.decode(gen))
+        t1 = time.time()
+        print(f' ({i+1} tokens in {t1-t0:.2f}s)', file=sys.stderr)
 
 
 if __name__ == '__main__':
