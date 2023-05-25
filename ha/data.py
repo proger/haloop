@@ -137,7 +137,7 @@ def make_dataset(s):
         case ['labels', label_file]:
             return LabelFile(Path(label_file))
         case ['head', subset]:
-            return torch.utils.data.Subset(LibriSpeech(subset), range(16))
+            return torch.utils.data.Subset(make_dataset(subset), range(16))
         case ['wdrop.4', subset]:
             return WordDrop(make_dataset(subset), p_drop_words=0.4)
         case ['wdrop.1', subset]:
