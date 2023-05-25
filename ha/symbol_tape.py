@@ -112,6 +112,25 @@ class Vocabulary:
         return s
 
 
+class WordVocabulary(Vocabulary):
+    def get_idx(self, string, extend_vocab=False):
+        if string in self.string_to_id:
+            return self.string_to_id[string]
+        elif extend_vocab:  # add the new word
+            return self.add_new_word(string)
+        else:
+            return self.unk_id
+
+    def encode(self, text, extend_vocab=False):
+        return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text.split()])
+
+    def decode(self, ids):
+        return [self.id_to_string[id] for id in ids]
+
+    def format(self, s):
+        return s
+
+
 def tokenize_bytes(text_file, vocab, extend_vocab=False, device='cpu'):
     if vocab is None:
         vocab = Vocabulary.bytes()
@@ -137,6 +156,20 @@ def tokenize_chars(text_file, vocab, extend_vocab=True, device='cpu'):
     data = torch.tensor(full_text, device=device, dtype=torch.int16)
     return data, vocab
 
+
+def tokenize_words(text_file, vocab, extend_vocab=True, device='cpu'):
+    if vocab is None:
+        vocab = WordVocabulary()
+
+    full_text = []
+    print(f"Using word vocabulary from: {text_file}", file=sys.stderr)
+    with open(text_file, 'r') as text:
+        for line in text:
+            for token in line.strip().split():
+                full_text.append(vocab.get_idx(token, extend_vocab=extend_vocab))
+    print(f"Vocabulary size: {len(vocab)}", file=sys.stderr)
+    data = torch.tensor(full_text, device=device, dtype=torch.int16)
+    return data, vocab
 
 
 class SymbolTape:

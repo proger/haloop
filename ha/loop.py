@@ -39,6 +39,23 @@ class Collator:
         return batch_indices, inputs, targets, input_lengths, target_lengths
 
 
+def make_vocab(vocab_descriptor):
+    match vocab_descriptor.split(':', maxsplit=1):
+        case ["bytes"]:
+            return symbol_tape.Vocabulary.bytes()
+        case ["ascii"]:
+            return symbol_tape.Vocabulary.ascii()
+        case ["cmu"]:
+            return Vocabulary(add_closures=False)
+        case ["xen"]:
+            return Vocabulary(add_closures=True)
+        case ["words", path]:
+            _, vocab = symbol_tape.tokenize_words(path, None)
+            return vocab
+        case _:
+            raise ValueError("Unknown vocabulary descriptor. Possible values: bytes|ascii|cmu|xen|words:path/to/vocab/words.txt")
+
+
 class System(nn.Module):
     def __init__(self, args):
         super().__init__()
@@ -50,15 +67,7 @@ class System(nn.Module):
             case "r9":
                 self.encoder = FixupResNet(FixupBasicBlock, [5,5,5]).to(args.device)
 
-        match args.vocab:
-            case "bytes":
-                self.vocab = symbol_tape.Vocabulary.bytes()
-            case "ascii":
-                self.vocab = symbol_tape.Vocabulary.ascii()
-            case "cmu":
-                self.vocab = Vocabulary(add_closures=False)
-            case "xen":
-                self.vocab = Vocabulary(add_closures=True)
+        self.vocab = make_vocab(args.vocab)
 
         match args.star_penalty:
             case None:
@@ -236,7 +245,11 @@ class System(nn.Module):
                 dist['ler'] = round(dist['total'] / dist['length'], 2)
                 lers.append(dist['ler'])
 
-                if isinstance(ref1, str):
+                if isinstance(ref1, list):
+                    star = '␣'
+                    hyp, ref = list(zip(*align(hyp1, ref1, star)))
+                    ali = tuple(ali)
+                elif isinstance(ref1, str):
                     star = '␣'
                     hyp, ref = list(zip(*align(hyp1, ref1, star)))
                     hyp, ref = ''.join(hyp), ''.join(ref)
@@ -278,7 +291,7 @@ def make_parser():
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
-    parser.add_argument('--vocab', type=str, default='ascii', choices=['bytes', 'ascii', 'cmu', 'xen'], help="Vocabulary to use: raw bytes, ascii, CMUdict, Xen (CMUdict + glottal closures)")
+    parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt")
     parser.add_argument('--lm', type=Path, help="Path to language model checkpoint trained with hal.")
     parser.add_argument('--clip-grad-norm', type=float, default=0.1, help="Clip gradient norm to this value")
     return parser

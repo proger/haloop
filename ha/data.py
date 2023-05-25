@@ -19,6 +19,25 @@ def make_frames(wav):
     return frames # (T, F)
 
 
+class LabelFile(torch.utils.data.Dataset):
+    def __init__(self, path: Path):
+        super().__init__()
+        with open(path) as f:
+            self.ark = dict(line.strip().split(maxsplit=1) for line in f)
+            self.filenames = list(self.ark.keys())
+
+    def __len__(self):
+        return len(self.filenames)
+
+    def utt_id(self, index):
+        return self.filenames[index]
+
+    def __getitem__(self, index):
+        wav, sr = torchaudio.load(self.filenames[index])
+        assert sr == 16000
+        return index, make_frames(wav), self.ark[self.filenames[index]]
+
+
 class Directory(torch.utils.data.Dataset):
     def __init__(self, path: Path):
         super().__init__()
@@ -115,6 +134,8 @@ def make_dataset(s):
     match s.split(':', maxsplit=1):
         case [subset]:
             return LibriSpeech(subset)
+        case ['labels', label_file]:
+            return LabelFile(Path(label_file))
         case ['head', subset]:
             return torch.utils.data.Subset(LibriSpeech(subset), range(16))
         case ['wdrop.4', subset]:
