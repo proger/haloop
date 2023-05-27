@@ -55,7 +55,7 @@ parser.add_argument("--beta1", type=float, default=0.9, help="Beta1 for AdamW op
 parser.add_argument("--beta2", type=float, default=0.99, help="Beta2 for AdamW optimizer")
 
 # lr schedule
-parser.add_argument("--lr_schedule", choices=["const", "cosine"], default="cosine", help="Learning rate schedule")
+parser.add_argument("--lr_schedule", type=str, choices=["const", "cosine"], default="cosine", help="Learning rate schedule")
 parser.add_argument("--warmup_iters", type=int, default=2000, help="Number of warm-up steps")
 parser.add_argument("--lr_decay_iters", type=int, default=200000, help="Number of steps for learning rate decay")
 parser.add_argument("--min_lr", type=float, default=6e-5, help="Minimum learning rate")
