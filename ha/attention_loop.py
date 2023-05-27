@@ -162,7 +162,8 @@ if args.lora:
     lora.attach_to_c_attn(model)
     lora.mark_only_lora_as_trainable_(model)
     print("trainable params", sum(p.numel() for p in model.parameters() if p.requires_grad))
-    model.to(device)
+
+model.to(device)
 
 # optimizer
 optimizer = configure_optimizers(model, args.weight_decay, args.learning_rate, (args.beta1, args.beta2), device_type)
