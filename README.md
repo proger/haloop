@@ -2,15 +2,24 @@
 
 [![PyPI Version](https://img.shields.io/pypi/v/haloop.svg)](https://pypi.python.org/pypi/haloop)
 
-Haloop is an agent toolkit. It provides `hac` program for acoustic model training, `hal` program for language model training, and `hat` for agent testing. The package is available on PyPI:
+Haloop is a speech agent toolkit. Haloop provides:
+
+- `hac` program for acoustic model training;
+- `hal` for RNN language model training and evaluation;
+- `hala` for causal attention model training;
+- `hat` for agent testing.
+
+The package can be installed from PyPI:
 
 ```
 pip install haloop
 ```
 
-By default, `hat` operates as a REPL for Ukrainian GPT-2 models from the paper [GPT-2 Metadata Pretraining Towards Instruction Finetuning for Ukrainian](https://github.com/proger/uk4b).
+### Pretrained models
 
-To use `hat`, install some additional dependencies and models:
+`hat` can be used with Ukrainian GPT-2 models from our paper [GPT-2 Metadata Pretraining Towards Instruction Finetuning for Ukrainian](https://github.com/proger/uk4b).
+
+You will need to install and download:
 
 ```
 pip install bitsandbytes sentencepiece
@@ -19,11 +28,13 @@ wget https://a.wilab.org.ua/gpt/wiki.model  # sentencepiece tokenizer
 wget https://a.wilab.org.ua/gpt/ckpt10m.pt  # model checkpoint for GPT-2 Large
 ```
 
-Now, kick start the REPL:
+Now, kick off the REPL:
 
 ```
 hat --spm wiki.model ckpt10m.pt
 ```
+
+### Citing
 
 Please cite:
 
@@ -43,4 +54,6 @@ Please cite:
 }
 ```
 
-See also [Speech Discrimination by Dynamic Programming, T. K. Vintsyuk (1968)](https://link.springer.com/article/10.1007/BF01074755)
+### Reading
+
+[Speech Discrimination by Dynamic Programming, T. K. Vintsyuk (1968)](https://link.springer.com/article/10.1007/BF01074755)

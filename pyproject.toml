@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "haloop"
 description = 'speech agent for 100 hours'
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 keywords = []
 authors = [
@@ -15,7 +15,6 @@ authors = [
 classifiers = [
   "Development Status :: 4 - Beta",
   "Programming Language :: Python",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: Implementation :: CPython",
@@ -32,13 +31,14 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-Documentation = "https://github.com/proger/ha1#readme"
-Issues = "https://github.com/proger/ha1/issues"
-Source = "https://github.com/proger/ha1"
+Documentation = "https://github.com/proger/haloop#readme"
+Issues = "https://github.com/proger/haloop/issues"
+Source = "https://github.com/proger/haloop"
 
 [project.scripts]
 hac = "ha.loop:main"
 hal = "ha.rnnlm:main"
+hala = "ha.attention_loop:main"
 hat = "ha.attention:main"
 
 [tool.hatch.version]
@@ -54,7 +54,7 @@ cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=ha --c
 no-cov = "cov --no-cov {args}"
 
 [[tool.hatch.envs.test.matrix]]
-python = ["39", "310", "311"]
+python = ["310", "311"]
 
 [tool.coverage.run]
 branch = true
