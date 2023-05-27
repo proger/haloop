@@ -154,12 +154,11 @@ class GPT(nn.Module):
         x = self.transformer.drop(tok_emb + pos_emb)
 
         for i, block in enumerate(self.transformer.h):
-            x, _att_entropy, _present = block(x, estimate_entropy=False)
+            x, _att_entropy, _present = block(x, measure_entropy=False)
         x = self.transformer.ln_f(x)
 
         logits = self.lm_head(x)
-
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction='mean')
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=0)
         return loss
 
     def forward(self,
