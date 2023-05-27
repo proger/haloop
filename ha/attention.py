@@ -47,7 +47,7 @@ class MonitoredCausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
 
-    def forward(self, x, past=None):
+    def forward(self, x, past=None, estimate_entropy=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -60,24 +60,28 @@ class MonitoredCausalSelfAttention(nn.Module):
             k_cache, v_cache = past
             k, v = torch.cat([k_cache, k], dim=2), torch.cat([v_cache, v], dim=-2)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
+        if estimate_entropy:
+            # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+            bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
 
-        att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
-        att = att.masked_fill(bias == 0, float('-inf'))
-        att = att.softmax(dim=-1) # (B, nh, T, T)
+            att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
+            att = att.masked_fill(bias == 0, float('-inf'))
+            att = att.softmax(dim=-1) # (B, nh, T, T)
 
-        # measure attention entropy
-        att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
+            # measure attention entropy
+            att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
 
-        # attend
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            # attend
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout, is_causal=True)
+            att_entropy = -1.
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y, att_entropy, torch.stack([k, v])
+        return y, att_entropy, torch.stack([k, v]) if past is not None else None
 
 
 class MLP(nn.Module):
@@ -103,8 +107,8 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x, past=None):
-        x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past)
+    def forward(self, x, past=None, estimate_entropy=True):
+        x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, estimate_entropy=estimate_entropy)
         x = x + x_attn
         x = x + self.mlp(self.ln_2(x))
         return x, att_entropy, present
@@ -136,6 +140,27 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+
+    def forward_all(self,
+                    input_ids, # (B, T)
+                    target_ids, # (B, T)
+                    ):
+        device = input_ids.device
+        _, t = input_ids.size()
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+
+        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
+
+        for i, block in enumerate(self.transformer.h):
+            x, _att_entropy, _present = block(x, estimate_entropy=False)
+        x = self.transformer.ln_f(x)
+
+        logits = self.lm_head(x)
+
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction='mean')
+        return loss
 
     def forward(self,
                 input_ids, # (B, T)

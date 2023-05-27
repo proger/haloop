@@ -14,7 +14,7 @@ import math
 from typing import List
 
 
-class LoRALayer():
+class LoRALayer:
     def __init__(
         self, 
         r: int, 
@@ -209,3 +209,9 @@ def _replace_module(parent_module, child_name, new_module, old_module):
     if getattr(old_module, "state", None) is not None:
         new_module.state = old_module.state
         new_module.to(old_module.weight.device)
+
+
+def mark_only_lora_as_trainable_(self: nn.Module):
+    for n, p in self.named_parameters():
+        if 'lora_' not in n:
+            p.requires_grad = False
