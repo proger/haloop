@@ -47,7 +47,7 @@ class MonitoredCausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.dropout = config.dropout
 
-    def forward(self, x, past=None, estimate_entropy=False):
+    def forward(self, x, past=None, measure_entropy=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -60,7 +60,7 @@ class MonitoredCausalSelfAttention(nn.Module):
             k_cache, v_cache = past
             k, v = torch.cat([k_cache, k], dim=2), torch.cat([v_cache, v], dim=-2)
 
-        if estimate_entropy:
+        if measure_entropy:
             # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
 
@@ -107,8 +107,8 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x, past=None, estimate_entropy=True):
-        x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, estimate_entropy=estimate_entropy)
+    def forward(self, x, past=None, measure_entropy=True):
+        x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, measure_entropy=measure_entropy)
         x = x + x_attn
         x = x + self.mlp(self.ln_2(x))
         return x, att_entropy, present
