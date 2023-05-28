@@ -144,22 +144,49 @@ class GPT(nn.Module):
     def forward_all(self,
                     input_ids, # (B, T)
                     target_ids, # (B, T)
+                    past=None # (nlayers, 2, B, nh, T, hs)
                     ):
         device = input_ids.device
-        _, t = input_ids.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+        b, t = input_ids.size()
+        if past is None:
+            t0 = 0
+            past = torch.zeros(self.config.n_layer, 2, b, self.config.n_head, t0, self.config.n_embd // self.config.n_head, device=device)
+        else:
+            t0 = past.size(-2)
+            t = t0 + t
+        pos = torch.arange(t0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
 
         tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
 
         for i, block in enumerate(self.transformer.h):
-            x, _att_entropy, _present = block(x, measure_entropy=False)
+            x, _att_entropy, _present = block(x, past[i], measure_entropy=False)
         x = self.transformer.ln_f(x)
 
         logits = self.lm_head(x)
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=0)
         return loss
+
+    def forward_context(self, input_ids):
+        device = input_ids.device
+        b, t = input_ids.size()
+        t0 = 0
+        past = torch.zeros(self.config.n_layer, 2, b, self.config.n_head, t0, self.config.n_embd // self.config.n_head, device=device)
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+        pos = torch.arange(t0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
+
+        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
+
+        present = past.new_empty((self.config.n_layer, 2, b, self.config.n_head, t, self.config.n_embd // self.config.n_head))
+        for i, block in enumerate(self.transformer.h):
+            x, _att_entropy, present[i] = block(x, past=past[i], measure_entropy=False)
+        x = self.transformer.ln_f(x)
+
+        return present
 
     def forward(self,
                 input_ids, # (B, T)
