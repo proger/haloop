@@ -320,3 +320,7 @@ if args.eval and master_process:
 
 if ddp:
     destroy_process_group()
+
+
+def main():
+    pass # stub for hala
