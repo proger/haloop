@@ -11,7 +11,6 @@ import time
 import math
 from pathlib import Path
 from contextlib import nullcontext
-from functools import partial
 
 import numpy as np
 import torch
@@ -34,6 +33,7 @@ parser.add_argument("--init", type=str, default="exp/uk4b_medium/medium_20230411
 parser.add_argument("--save", type=str, default="exp/adapter.pt", help="Path to save checkpoints")
 parser.add_argument("--train", type=str, help="Path to training data")
 parser.add_argument("--eval", type=str, help="Path to validation data")
+parser.add_argument("--cond", action="store_true", help="Perform conditional training: predict only the very last token in the sequence")
 
 parser.add_argument("--eval-interval", type=int, default=100, help="Interval for evaluation")
 parser.add_argument("--log-interval", type=int, default=1, help="Interval for logging")
@@ -114,21 +114,27 @@ val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
 
 def get_batch(data: np.ndarray,
               step: int,
-              block_size=512,
-              batch_size=3,
-              device_type="cuda",
-              device="cuda:0"):
+              block_size=args.block_size,
+              batch_size=args.batch_size,
+              device_type=device_type,
+              device=args.device):
     ix = range(step * block_size * batch_size, (step + 1) * block_size * batch_size, block_size)
     x = torch.stack([torch.from_numpy((data[i : i + block_size].astype(np.int64))) for i in ix])
     y = torch.cat((x[:, 1:], x.new_zeros((len(x), 1))), dim=1)
+
+    if args.cond:
+        # predict only final token in the sequence
+        final_token = (x != 0).sum(dim=-1) - 2
+        mask = torch.nn.functional.one_hot(final_token, num_classes=block_size)
+        y = y*mask
+        #print('cond', x, y[torch.arange(batch_size), final_token])
+
     if device_type == "cuda":
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
     else:
         x, y = x.to(device), y.to(device)
     return x, y
-
-get_batch = partial(get_batch, block_size=args.block_size, batch_size=args.batch_size, device_type=device_type, device=device)
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
