@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 
-from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, SymbolTape
+from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, SymbolTape, load_u16, SymbolTapeNoPad
 
 console = Console()
 def print(*args, flush=False, **kwargs):
@@ -65,6 +65,31 @@ class LM(nn.Module):
         return (h.detach(), c.detach())
 
 
+def make_dataset(
+    args,
+    vocab=None,
+    extend_vocab=False,
+    pad_id=0,
+):
+    batch_size, bptt_len = args.batch_size, args.bptt_len
+    match str(args.train).rsplit(':', maxsplit=1):
+        case ['u16', path]:
+            vocab = Vocabulary(pad_token=0, unk_token=0)
+            vocab.id_to_string = {}
+            vocab.string_to_id = {}
+            for x in range(int(args.vocab)):
+                vocab.add_new_word(str(x))
+            data = load_u16(path)
+            return SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len), vocab
+        case ['bytes', path]:
+            data, vocab = tokenize_bytes(path, vocab, extend_vocab=extend_vocab)
+            dataset = SymbolTape(data, batch_size=batch_size, bptt_len=bptt_len, pad_id=pad_id)
+            return dataset, vocab
+        case ['chars', path]:
+            data, vocab = tokenize_chars(path, vocab, extend_vocab=extend_vocab)
+            dataset = SymbolTape(data, batch_size=batch_size, bptt_len=bptt_len, pad_id=pad_id)
+            return dataset, vocab
+
 
 class System:
     def __init__(self, args):
@@ -79,11 +104,12 @@ class System:
             extend_vocab = True
 
         if args.train:
-            if args.vocab_from_data:
-                self.data, self.vocab = tokenize_chars(args.train, self.vocab, extend_vocab=extend_vocab)
-            else:
-                self.data, self.vocab = tokenize_bytes(args.train, self.vocab, extend_vocab=extend_vocab)
-            self.dataset = SymbolTape(self.data, args.batch_size, args.bptt_len, pad_id=0)
+            self.dataset, self.vocab = make_dataset(
+                args,
+                self.vocab,
+                extend_vocab=extend_vocab,
+                pad_id=0,
+            )
 
             self.batches = torch.utils.data.DataLoader(
                 self.dataset,
@@ -269,11 +295,11 @@ class System:
                         yield self.args.start_token + text
 
         for prompt in prompt_stream():
-            if not self.args.vocab_from_data:
+            if self.args.vocab != 'auto':
                 prompt = prompt.encode('utf-8')
             prompt_score, completion = self.complete(prompt, self.args.bptt_len, top_k=self.args.top_k)
             output = prompt + completion if completion else prompt
-            if not self.args.vocab_from_data:
+            if self.args.vocab != 'auto':
                 outputs.append(str(output, 'utf-8', errors='replace'))
             else:
                 outputs.append(output)
@@ -309,8 +335,8 @@ To compute BPC on evaluation data from files (first column is ignored) try:
     parser.add_argument('--bptt-len', default=256, type=int, help='RNN sequence length (window size)')
     parser.add_argument('--rnn-size', default=2048, type=int, help='RNN width')
     parser.add_argument('--num-layers', default=1, type=int, help='RNN depth')
-    parser.add_argument('--vocab-from-data', action='store_true', help='build character vocabulary from the data')
-    parser.add_argument('--train', type=Path, help='Train model on this data')
+    parser.add_argument('--vocab', default='auto', type=str, help='how to build vocabulary')
+    parser.add_argument('--train', type=str, help='Train model on this data')
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
     parser.add_argument('--complete', type=str, nargs='+', help="Prompts to complete during evaluation")
