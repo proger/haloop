@@ -141,6 +141,13 @@ def tokenize_bytes(text_file, vocab, extend_vocab=False, device='cpu'):
     return data, vocab
 
 
+def load_u16(filename):
+    s = torch.ShortStorage.from_file(str(filename), size=Path(filename).stat().st_size // 2, shared=False)
+    data = torch.ShortTensor(s)
+    print(f"Memory mapping u16 from: {filename}, shape: {data.shape}", file=sys.stderr)
+    return data
+
+
 def tokenize_chars(text_file, vocab, extend_vocab=True, device='cpu'):
     if vocab is None:
         vocab = Vocabulary()
@@ -170,6 +177,48 @@ def tokenize_words(text_file, vocab, extend_vocab=True, device='cpu'):
     print(f"Vocabulary size: {len(vocab)}", file=sys.stderr)
     data = torch.tensor(full_text, device=device, dtype=torch.int16)
     return data, vocab
+
+
+class SymbolTapeNoPad:
+    def __init__(self, data, batch_size, bptt_len):
+        self.batch_size = batch_size
+        self.bptt_len = bptt_len
+        self.tape_len = math.ceil(len(data) / batch_size)
+        self.tape_parts, self.trailing_tokens = divmod(self.tape_len, bptt_len)
+        self.data = data
+
+    def __len__(self):
+        return self.tape_parts + int(bool(self.trailing_tokens))
+
+    def __getitem__(self, i):
+        if i == 0:
+            # first batch: add pad_id token in the beginning
+            batch = self.data.new_full((self.bptt_len, self.batch_size), -2323)
+
+            for tape_index in range(self.batch_size):
+                offset = tape_index * (self.tape_len - 1)
+                # remove one for padding
+                part = self.data[offset + i*self.bptt_len:offset + (i+1) * self.bptt_len]
+                batch[:len(part), tape_index] = part
+        elif i == self.tape_parts:
+            # last batch: truncate
+            batch = self.data.new_full((self.trailing_tokens, self.batch_size), -2323)
+
+            for tape_index in range(self.batch_size):
+                # remove one for the padding in batch 0
+                offset = tape_index * (self.tape_len - 1)
+                part = self.data[offset + i*self.bptt_len:offset + i*self.bptt_len + self.trailing_tokens]
+                batch[:len(part), tape_index] = part
+        else:
+            # other batches: account for the padding in batch 0
+            batch = self.data.new_full((self.bptt_len, self.batch_size), -2323)
+
+            for tape_index in range(self.batch_size):
+                offset = tape_index * (self.tape_len - 1)
+                part = self.data[offset + i*self.bptt_len:offset + (i+1) * self.bptt_len]
+                batch[:len(part), tape_index] = part
+
+        return batch
 
 
 class SymbolTape:
@@ -217,8 +266,8 @@ class SymbolTape:
 
 
 if __name__ == '__main__':
-    tape = SymbolTape(torch.as_tensor(bytearray(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv")),
-                      batch_size=3, bptt_len=8, pad_id=0)
+    tape = SymbolTapeNoPad(torch.as_tensor(bytearray(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv")),
+                      batch_size=3, bptt_len=8)
                       #batch_size=256, bptt_len=2, pad_id=0)
     for i in range(len(tape)):
         print(tape[i], tape[i].shape)
