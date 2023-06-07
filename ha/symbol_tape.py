@@ -95,7 +95,7 @@ class Vocabulary:
         self.id_to_string = {}
         self.string_to_id = {}
 
-        for i, x in enumerate("""ε␁␂␃␄␅␆␇␈␉␤⇥␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\ ]^_`abcdefghijklmnopqrstuvwxyz{|}~␡"""):
+        for i, x in enumerate("""ε␁␂␃␄␅␆␇␈␉␤⇥␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~␡"""):
             y = self.add_new_word(x)
             assert y == i
             if i == 0: # nul
