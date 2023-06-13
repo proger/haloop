@@ -286,7 +286,6 @@ while args.train:
                     'optimizer': optimizer.state_dict(),
                     'model_args': raw_model.config.state_dict(),
                     'iter_num': iter_num,
-                    'best_val_loss': best_val_loss,
                     'val_loss': val_loss,
                     'args': args,
                 })
