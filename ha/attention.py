@@ -31,8 +31,8 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
-class MonitoredCausalSelfAttention(nn.Module):
-    """CausalSelfAttention that measures attention entropy"""
+class MonitoredSelfAttention(nn.Module):
+    """SelfAttention that measures attention entropy"""
 
     def __init__(self, config):
         super().__init__()
@@ -46,6 +46,7 @@ class MonitoredCausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.causal = config.causal
 
     def forward(self, x, past=None, measure_entropy=False):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
@@ -61,11 +62,14 @@ class MonitoredCausalSelfAttention(nn.Module):
             k, v = torch.cat([k_cache, k], dim=2), torch.cat([v_cache, v], dim=-2)
 
         if measure_entropy:
-            # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-            bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
-
+            # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
-            att = att.masked_fill(bias == 0, float('-inf'))
+
+            if self.causal:
+                # future tokens attend to the past: apply triangular mask
+                bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
+                att = att.masked_fill(bias == 0, float('-inf'))
+
             att = att.softmax(dim=-1) # (B, nh, T, T)
 
             # measure attention entropy
@@ -74,7 +78,7 @@ class MonitoredCausalSelfAttention(nn.Module):
             # attend
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         else:
-            y = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout, is_causal=True)
+            y = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout, is_causal=self.causal)
             att_entropy = -1.
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -103,7 +107,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = MonitoredCausalSelfAttention(config)
+        self.attn = MonitoredSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
@@ -272,6 +276,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = False
     stable_embedding: bool = False
+    causal: bool = True
 
 
 def load_model(ckpt_path, *, map_location):
@@ -315,7 +320,7 @@ def main():
         print("Please install sentencepiece with: pip install sentencepiece", file=sys.stderr)
         raise
 
-    parser = argparse.ArgumentParser('GPT REPL')
+    parser = argparse.ArgumentParser('Attention REPL')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--steps', type=int, default=10)
