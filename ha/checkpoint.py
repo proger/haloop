@@ -1,4 +1,22 @@
+from pathlib import Path
 from typing import Dict, List, Optional
+import torch
+
+
+class Checkpointer:
+    def __init__(self, path: Path, save_all: bool = False):
+        self.best_loss = float('inf')
+        self.save_all = save_all
+        self.path = path
+
+    def __call__(self, loss, epoch, checkpoint_fn):
+        should_save = self.save_all or loss <= self.best_loss
+        self.best_loss = min(loss, self.best_loss)
+        if should_save:
+            path = self.path
+            checkpoint = checkpoint_fn()
+            print(f'saving checkpoint to {path}', flush=True)
+            torch.save(checkpoint, path)
 
 
 def construct_path_suffix(

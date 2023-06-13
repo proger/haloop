@@ -17,10 +17,11 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from .attention import GPTConfig, GPT
+from .init import load_model
 from . import lora
 from .optim import configure_optimizers
-from .checkpoint import construct_path_suffix
+from .checkpoint import construct_path_suffix, Checkpointer
+from .mlm import mask_tokens
 
 
 class Formatter(argparse.ArgumentDefaultsHelpFormatter,
@@ -33,7 +34,8 @@ parser.add_argument("--init", type=str, default="exp/uk4b_medium/medium_20230411
 parser.add_argument("--save", type=str, default="exp/adapter.pt", help="Path to save checkpoints")
 parser.add_argument("--train", type=str, help="Path to training data")
 parser.add_argument("--eval", type=str, help="Path to validation data")
-parser.add_argument("--cond", action="store_true", help="Perform conditional training: predict only the very last token in the sequence")
+parser.add_argument("--objective", choices=["lm", "denoise", "cond"], default="lm", type=str, help="lm: predict next token; denoise: predict masked tokens; cond: predict one last token in the sequence")
+parser.add_argument("--train-shuffle", action='store_true', help="If True, randomly samples batches from the training set")
 
 parser.add_argument("--eval-interval", type=int, default=100, help="Interval for evaluation")
 parser.add_argument("--log-interval", type=int, default=1, help="Interval for logging")
@@ -64,6 +66,7 @@ parser.add_argument("--backend", type=str, default="nccl", help="DDP backend")
 parser.add_argument("--device", type=str, default="cuda:1", help="Device for training")
 parser.add_argument("--dtype", type=str, default="bfloat16", help="Data type")
 parser.add_argument("--compile", action="store_true", help="Use PyTorch 2.0 to compile the model")
+parser.add_argument("--wandb", action="store_true", help="Enable wandb logging")
 
 args = parser.parse_args()
 
@@ -71,15 +74,6 @@ if args.train is None and args.eval is None:
    parser.error("at least one of --train and --eval is required")
 print(args)
 
-ckpt_path = Path(args.save)
-ckpt_suffix = construct_path_suffix(
-    vars(args),
-    vars(args),
-    always_include=["init", "learning_rate", "max_iters", "weight_decay", "beta1", "beta2", "grad_clip", "min_lr"],
-    always_ignore=["ckpt_path", "train_bin", "valid_bin", "wandb_log", "wandb_project", "wandb_run_name", "compile"],
-)
-ckpt_path = ckpt_path.parent / f"{ckpt_path.stem}__{ckpt_suffix}{ckpt_path.suffix}"
-print(f"Saving checkpoint to {ckpt_path}")
 # -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
@@ -98,8 +92,6 @@ else:
     seed_offset = 0
     device = args.device
 
-if master_process:
-    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
@@ -111,6 +103,18 @@ ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=
 train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
 val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
 
+if master_process:
+    ckpt_path = Path(args.save)
+    ckpt_suffix = construct_path_suffix(
+        vars(args),
+        vars(args),
+        always_include=["init", "learning_rate", "max_iters", "weight_decay", "beta1", "beta2", "grad_clip", "min_lr"],
+        always_ignore=["ckpt_path", "train_bin", "valid_bin", "wandb_log", "wandb_project", "compile"],
+    )
+    ckpt_path = ckpt_path.parent / f"{ckpt_path.stem}__{ckpt_suffix}{ckpt_path.suffix}"
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint = Checkpointer(path=ckpt_path, save_all=args.always_save_checkpoint)
+    print(f"Saving checkpoint to {ckpt_path}")
 
 def get_batch(data: np.ndarray,
               step: int,
@@ -118,16 +122,23 @@ def get_batch(data: np.ndarray,
               batch_size=args.batch_size,
               device_type=device_type,
               device=args.device):
-    ix = range(step * block_size * batch_size, (step + 1) * block_size * batch_size, block_size)
+    if args.train_shuffle:
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+    else:
+        ix = range(step * block_size * batch_size, (step + 1) * block_size * batch_size, block_size)
     x = torch.stack([torch.from_numpy((data[i : i + block_size].astype(np.int64))) for i in ix])
-    y = torch.cat((x[:, 1:], x.new_zeros((len(x), 1))), dim=1)
 
-    if args.cond:
-        # predict only final token in the sequence
-        final_token = (x != 0).sum(dim=-1) - 2
-        mask = torch.nn.functional.one_hot(final_token, num_classes=block_size)
-        y = y*mask
-        #print('cond', x, y[torch.arange(batch_size), final_token])
+    match args.objective:
+        case "lm":
+            y = torch.cat((x[:, 1:], x.new_zeros((len(x), 1))), dim=1)
+        case "denoise":
+            x, y = mask_tokens(x)
+        case "cond":
+            # predict only final token in the sequence
+            final_token = (x != 0).sum(dim=-1) - 2
+            mask = torch.nn.functional.one_hot(final_token, num_classes=block_size)
+            y = y*mask
+            #print('cond', x, y[torch.arange(batch_size), final_token])
 
     if device_type == "cuda":
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
@@ -136,30 +147,12 @@ def get_batch(data: np.ndarray,
         x, y = x.to(device), y.to(device)
     return x, y
 
-# init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
-best_val_loss = 1e9
 
-print(f"Resuming training from a checkpoint", args.init)
-# resume training from a checkpoint.
-checkpoint = torch.load(args.init, map_location=device)
-model_args = checkpoint["model_args"]
-# create the model
-gptconf = GPTConfig(**model_args)
-model = GPT(gptconf)
-state_dict = checkpoint["model"]
-# fix the keys of the state dictionary :(
-# honestly no idea how checkpoints sometimes get this prefix, have to debug more
-unwanted_prefix = "_orig_mod."
-for k, v in list(state_dict.items()):
-    if k.startswith(unwanted_prefix):
-        state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-model.load_state_dict(state_dict)
+print(f"Loading model", args.init)
+model = load_model(args.init, map_location=device)
 
-# crop down the model block size if desired, using model surgery
-if args.block_size < model.config.block_size:
-    model.crop_block_size(args.block_size)
-    model_args["block_size"] = args.block_size  # so that the checkpoint will have the right value
+assert args.block_size == model.config.block_size, "Block sizes don't match"
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
@@ -167,7 +160,6 @@ scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
 if args.lora:
     lora.attach_to_c_attn(model)
     lora.mark_only_lora_as_trainable_(model)
-    print("trainable params", sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 model.to(device)
 
@@ -176,7 +168,7 @@ optimizer = configure_optimizers(model, args.weight_decay, args.learning_rate, (
 
 # compile the model
 if compile:
-    print("compiling the model... (takes a ~minute)")
+    print("Compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model)  # requires PyTorch 2.0
 
@@ -219,16 +211,18 @@ else:
     def get_lr(_):
         return args.learning_rate
 
-if False and master_process:
+if args.wandb and master_process:
     import wandb
-
-    wandb.init(project='attention', name=wandb_run_name, config=args)
+    wandb.init(config=args)
 
 train_batches = len(train_data) // args.block_size // args.batch_size // args.gradient_accumulation_steps
-print("have batches: ", train_batches)
 
-# training loop
 X, Y = get_batch(train_data, iter_num * args.gradient_accumulation_steps) # fetch the very first batch
+if master_process:
+    print("Trainable params", sum(p.numel() for p in model.parameters() if p.requires_grad))
+    print("Train batches:", train_batches)
+    print(f"Tokens per step, update:", X.numel(), X.numel() * args.gradient_accumulation_steps)
+
 t0 = time.time()
 while args.train:
 
@@ -286,26 +280,21 @@ while args.train:
             print(f"eval {iter_num}: val loss {val_loss:.4f}")
             log_dict["val/loss"] = val_loss
             if not math.isnan(val_loss):
-                if val_loss < best_val_loss or args.always_save_checkpoint:
-                    best_val_loss = val_loss
-                    raw_model = model.module if ddp else model
-                    if iter_num > 0:
-                        checkpoint = {
-                            'model': raw_model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'model_args': model_args,
-                            'iter_num': iter_num,
-                            'best_val_loss': best_val_loss,
-                            'val_loss': val_loss,
-                            'config': args,
-                        }
-                        print(f"saving checkpoint to {ckpt_path}")
-                        torch.save(checkpoint, ckpt_path)
+                raw_model = model.module if ddp else model
+                checkpoint(loss=val_loss, epoch=iter_num, checkpoint_fn=lambda: {
+                    'model': raw_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'model_args': raw_model.config.state_dict(),
+                    'iter_num': iter_num,
+                    'best_val_loss': best_val_loss,
+                    'val_loss': val_loss,
+                    'args': args,
+                })
             else:
                 print("NaN loss detected")
                 break
 
-        if False:
+        if args.wandb:
             wandb.log(log_dict | {
                 "iter": iter_num,
                 "train/loss": train_loss,

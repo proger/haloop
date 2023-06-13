@@ -37,6 +37,7 @@ Source = "https://github.com/proger/haloop"
 
 [project.scripts]
 hac = "ha.loop:main"
+hai = "ha.init:main"
 hal = "ha.rnnlm:main"
 hala = "ha.attention_loop:main"
 hat = "ha.attention:main"

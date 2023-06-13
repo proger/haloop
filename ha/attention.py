@@ -1,7 +1,6 @@
 # modified from https://github.com/proger/uk4b/blob/main/model.py
 # which is in turn based on https://github.com/karpathy/nanoGPT/blob/master/model.py
 
-from dataclasses import dataclass
 import sys
 
 import math
@@ -266,49 +265,6 @@ def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, stop_
         yield input_ids_next
 
 
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = False
-    stable_embedding: bool = False
-    causal: bool = True
-
-
-def load_model(ckpt_path, *, map_location):
-    checkpoint = torch.load(ckpt_path, map_location=map_location)
-
-    if not 'vocab_size' in checkpoint['model_args']:
-        # assume checkpoint for a large model
-
-        checkpoint['model_args']['stable_embedding'] = True
-        checkpoint['model_args']['vocab_size'] = 50257
-        checkpoint['model_args']['bias'] = True
-
-        gptconf = GPTConfig(**checkpoint['model_args'])
-        model = nn.ModuleDict({'_orig_mod': GPT(gptconf)})
-        model.load_state_dict(checkpoint['model'], strict=False)
-    elif '_orig_mod.transformer.h.0.attn.c_attn.lora_A.weight' in checkpoint['model']:
-        gptconf = GPTConfig(**checkpoint['model_args'])
-        model = nn.ModuleDict({'_orig_mod': GPT(gptconf)})
-        lora.attach_to_c_attn(model)
-        model.load_state_dict(checkpoint['model'])
-    else:
-        gptconf = GPTConfig(**checkpoint['model_args'])
-        model = nn.ModuleDict({'_orig_mod': GPT(gptconf)})
-        model.load_state_dict(checkpoint['model'])
-
-    model.eval()
-    model.to(map_location)
-    model = model._orig_mod
-
-    return model
-
-
 @torch.inference_mode()
 def main():
     import argparse
@@ -320,7 +276,7 @@ def main():
         print("Please install sentencepiece with: pip install sentencepiece", file=sys.stderr)
         raise
 
-    parser = argparse.ArgumentParser('Attention REPL')
+    parser = argparse.ArgumentParser(description='Attention REPL')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--steps', type=int, default=10)
@@ -335,6 +291,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
+    from .init import load_model
     model = load_model(args.ckpt_path, map_location=device)
 
     sp = spm.SentencePieceProcessor(model_file=args.spm)
