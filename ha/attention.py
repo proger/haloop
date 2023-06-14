@@ -110,7 +110,7 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x, past=None, measure_entropy=True):
+    def forward(self, x, past=None, measure_entropy=False):
         x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, measure_entropy=measure_entropy)
         x = x + x_attn
         x = x + self.mlp(self.ln_2(x))
