@@ -285,6 +285,7 @@ def main():
     parser.add_argument('--steps', type=int, default=10)
     parser.add_argument('--top-k', type=int, default=1)
     parser.add_argument('--temperature', type=float, default=1.0)
+    parser.add_argument('--histfile', type=str, default='hat-history', help='Prompt history file')
     parser.add_argument('ckpt_path')
     args = parser.parse_args()
 
@@ -293,9 +294,15 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
-    readline.parse_and_bind("bind -v")
-    #readline.parse_and_bind("tab: complete")
-    readline.set_history_length(1000)
+    readline.parse_and_bind('bind -v')
+    #readline.parse_and_bind('tab: complete')
+    histfile = args.histfile
+    try:
+        readline.read_history_file(histfile)
+    except FileNotFoundError:
+        print('Creating history file:', histfile, file=sys.stderr)
+        readline.write_history_file(histfile)
+    history_len = readline.get_current_history_length()
 
     from .init import load_model
     model = load_model(args.ckpt_path, map_location=device)
@@ -352,6 +359,8 @@ def main():
 
         t1 = time.time()
         print(f' ({i+1} tokens in {t1-t0:.2f}s)', file=sys.stderr)
+
+    readline.append_history_file(readline.get_current_history_length() - history_len, histfile)
 
 
 if __name__ == '__main__':
