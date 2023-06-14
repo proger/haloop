@@ -279,12 +279,12 @@ def main():
 
     parser = argparse.ArgumentParser(description='Attention REPL')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--dtype', type=str, default='bfloat16', help='Data type')
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--spm', type=str, required=True)
     parser.add_argument('--steps', type=int, default=10)
     parser.add_argument('--top-k', type=int, default=1)
     parser.add_argument('--temperature', type=float, default=1.0)
-    parser.add_argument('--denoise', action='store_true', help='Treat __ input as a mask; ignores top-k, temperature and steps')
     parser.add_argument('ckpt_path')
     args = parser.parse_args()
 
@@ -299,6 +299,11 @@ def main():
 
     from .init import load_model
     model = load_model(args.ckpt_path, map_location=device)
+    print('Loaded model:', model.config, file=sys.stderr)
+    if not model.config.causal:
+        print('This model is bidirectional: treating __ as mask token', file=sys.stderr)
+
+    dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16}[args.dtype]
 
     sp = spm.SentencePieceProcessor(model_file=args.spm)
     class Tok:
@@ -313,29 +318,35 @@ def main():
             break
         readline.add_history(prompt)
 
-        start = [Tok.eos] + sp.encode(prompt)
-        if args.denoise:
-            start = [s if s != Tok.mask else Tok.unk for s in start]
+        match model.config.causal:
+            case False:
+                # replace __ masks
+                start = sp.encode(prompt)
+                start = [s if s != Tok.mask else Tok.unk for s in start]
+            case True:
+                # add eos token
+                start = [Tok.eos] + sp.encode(prompt)
+        
         x = (torch.tensor(start, dtype=torch.long, device=device)[None, ...])
-
         t0 = time.time()
 
-        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-            if args.denoise:
-                i = len(start)
-                x, _ = model.forward_context(x)
-                logits = model.lm_head(x)
-                token_ids = logits.argmax(dim=-1)
-                token_ids = token_ids.squeeze().cpu()
-                print(sp.decode(token_ids.tolist()))
-            else:
-                for i, token_id in enumerate(generate(model, x, args.steps, temperature=args.temperature, top_k=args.top_k)):
-                    token_id = token_id.item()
-                    piece = sp.id_to_piece(token_id)
-                    if piece.startswith('▁'):
-                        print(' ', end='')
-                        piece = piece[1:]
-                    print(piece, end='', flush=True)
+        with torch.amp.autocast(device_type='cuda', dtype=dtype):
+            match model.config.causal:
+                case False:
+                    i = len(start)
+                    x, _ = model.forward_context(x)
+                    logits = model.lm_head(x)
+                    token_ids = logits.argmax(dim=-1)
+                    token_ids = token_ids.squeeze().cpu()
+                    print(sp.decode(token_ids.tolist()))
+                case True:
+                    for i, token_id in enumerate(generate(model, x, args.steps, temperature=args.temperature, top_k=args.top_k)):
+                        token_id = token_id.item()
+                        piece = sp.id_to_piece(token_id)
+                        if piece.startswith('▁'):
+                            print(' ', end='')
+                            piece = piece[1:]
+                        print(piece, end='', flush=True)
 
         t1 = time.time()
         print(f' ({i+1} tokens in {t1-t0:.2f}s)', file=sys.stderr)
