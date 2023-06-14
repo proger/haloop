@@ -151,6 +151,7 @@ iter_num = 0
 
 print(f"Loading model", args.init)
 model = load_model(args.init, map_location=device)
+model.train()
 
 assert args.block_size == model.config.block_size, "Block sizes don't match"
 
