@@ -189,7 +189,7 @@ class GPT(nn.Module):
             x, _att_entropy, present[i] = block(x, past=past[i], measure_entropy=False)
         x = self.transformer.ln_f(x)
 
-        return present
+        return x, present
 
     def forward(self,
                 input_ids, # (B, T)
@@ -268,7 +268,8 @@ def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, stop_
 @torch.inference_mode()
 def main():
     import argparse
-    from rich.prompt import Prompt
+    import readline
+    import time
 
     try:
         import sentencepiece as spm
@@ -279,10 +280,11 @@ def main():
     parser = argparse.ArgumentParser(description='Attention REPL')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--seed', type=int, default=1337)
-    parser.add_argument('--steps', type=int, default=10)
     parser.add_argument('--spm', type=str, required=True)
+    parser.add_argument('--steps', type=int, default=10)
     parser.add_argument('--top-k', type=int, default=1)
     parser.add_argument('--temperature', type=float, default=1.0)
+    parser.add_argument('--denoise', action='store_true', help='Treat __ input as a mask; ignores top-k, temperature and steps')
     parser.add_argument('ckpt_path')
     args = parser.parse_args()
 
@@ -291,28 +293,49 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
+    readline.parse_and_bind("bind -v")
+    #readline.parse_and_bind("tab: complete")
+    readline.set_history_length(1000)
+
     from .init import load_model
     model = load_model(args.ckpt_path, map_location=device)
 
     sp = spm.SentencePieceProcessor(model_file=args.spm)
-
-    import time
+    class Tok:
+        unk = 50254
+        eos = 50256
+        mask = 21503
 
     while True:
-        prompt = Prompt.ask('prompt>-')
-        start = [50256] + sp.encode(prompt)
+        try:
+            prompt = input('>- ')
+        except EOFError:
+            break
+        readline.add_history(prompt)
+
+        start = [Tok.eos] + sp.encode(prompt)
+        if args.denoise:
+            start = [s if s != Tok.mask else Tok.unk for s in start]
         x = (torch.tensor(start, dtype=torch.long, device=device)[None, ...])
 
         t0 = time.time()
 
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            for i, token_id in enumerate(generate(model, x, args.steps, temperature=args.temperature, top_k=args.top_k)):
-                token_id = token_id.item()
-                piece = sp.id_to_piece(token_id)
-                if piece.startswith('▁'):
-                    print(' ', end='')
-                    piece = piece[1:]
-                print(piece, end='', flush=True)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+            if args.denoise:
+                i = len(start)
+                x, _ = model.forward_context(x)
+                logits = model.lm_head(x)
+                token_ids = logits.argmax(dim=-1)
+                token_ids = token_ids.squeeze().cpu()
+                print(sp.decode(token_ids.tolist()))
+            else:
+                for i, token_id in enumerate(generate(model, x, args.steps, temperature=args.temperature, top_k=args.top_k)):
+                    token_id = token_id.item()
+                    piece = sp.id_to_piece(token_id)
+                    if piece.startswith('▁'):
+                        print(' ', end='')
+                        piece = piece[1:]
+                    print(piece, end='', flush=True)
 
         t1 = time.time()
         print(f' ({i+1} tokens in {t1-t0:.2f}s)', file=sys.stderr)
