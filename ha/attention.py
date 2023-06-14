@@ -316,17 +316,19 @@ def main():
             prompt = input('>- ')
         except EOFError:
             break
-        readline.add_history(prompt)
 
         match model.config.causal:
             case False:
                 # replace __ masks
                 start = sp.encode(prompt)
                 start = [s if s != Tok.mask else Tok.unk for s in start]
+                if not start:
+                    continue
             case True:
                 # add eos token
                 start = [Tok.eos] + sp.encode(prompt)
         
+        readline.add_history(prompt)
         x = (torch.tensor(start, dtype=torch.long, device=device)[None, ...])
         t0 = time.time()
 
