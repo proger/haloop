@@ -4,6 +4,7 @@
 
 Haloop is a speech agent toolkit. Haloop provides:
 
+- `hai` program to initialize models;
 - `hac` program for acoustic model training;
 - `hal` for RNN language model training and evaluation;
 - `hala` for causal attention model training;
