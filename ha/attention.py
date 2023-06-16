@@ -52,30 +52,32 @@ class MonitoredSelfAttention(nn.Module):
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T', hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T', hs)
 
         if past is not None:
             k_cache, v_cache = past
-            k, v = torch.cat([k_cache, k], dim=2), torch.cat([v_cache, v], dim=-2)
+            k, v = torch.cat([k_cache, k], dim=-2), torch.cat([v_cache, v], dim=-2)
 
-        if measure_entropy:
-            # (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        if past is not None or measure_entropy:
+            # (B, nh, T, hs) x (B, nh, hs, T') -> (B, nh, T, T')
             att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
 
             if self.causal:
                 # future tokens attend to the past: apply triangular mask
-                bias = torch.tril(x.new_ones(T, T)).view(1, 1, T, T)
-                att = att.masked_fill(bias == 0, float('-inf'))
+                bias = x.new_ones(k.size(-2), k.size(-2)).tril()
+                # account for cache shift
+                bias = bias[-T:]
+                att = att.masked_fill(bias[None, None, :, :] == 0, float('-inf'))
 
-            att = att.softmax(dim=-1) # (B, nh, T, T)
+            att = att.softmax(dim=-1) # (B, nh, T, T')
 
             # measure attention entropy
             att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
 
             # attend
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+            y = att @ v # (B, nh, T, T') x (B, nh, T', hs) -> (B, nh, T, hs)
         else:
             y = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout, is_causal=self.causal)
             att_entropy = -1.
