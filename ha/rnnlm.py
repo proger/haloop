@@ -9,60 +9,12 @@ import torch.nn.functional as F
 import wandb
 
 from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, SymbolTape, load_u16, SymbolTapeNoPad
+from .rnn import Decoder
 
 console = Console()
 def print(*args, flush=False, **kwargs):
     console.log(*args, **kwargs)
 
-
-class LM(nn.Module):
-    def __init__(self, vocab_size, emb_dim, hidden_dim, num_layers, dropout=0.0):
-        super().__init__()
-
-        self.num_classes = vocab_size
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-
-        self.embedding = nn.Embedding(vocab_size, emb_dim)
-        self.rnn = nn.LSTM(emb_dim, hidden_dim, num_layers, dropout=dropout)
-        self.out_layer = nn.Linear(hidden_dim, vocab_size)
-
-        self.out_layer.weight = self.embedding.weight
-
-    def forward(self,
-                input, # (T, N)
-                state # ((L, N, H), (L, N, H))
-                ):
-        emb = self.embedding(input)
-
-        output, state = self.rnn(emb, state)
-        output = self.out_layer(output) # (T, N, V)
-
-        output = output.view(-1, self.num_classes)
-        return output, state
-
-    def forward_batch_first(self,
-                            input, # (N, T),
-                            state # ((L, N, H), (L, N, H))
-                            ):
-        emb = self.embedding(input)
-        emb = emb.transpose(0,1) # (T, N, H)
-
-        output, state = self.rnn(emb, state)
-        output = self.out_layer(output) # (T, N, V)
-        output = output.transpose(0,1) # (N, T, V)
-
-        return output, state
-
-    def init_hidden(self, batch_size=1):
-        weight = self.out_layer.weight
-        h = weight.new_zeros(self.num_layers, batch_size, self.hidden_dim)
-        c = weight.new_zeros(self.num_layers, batch_size, self.hidden_dim)
-        return (h,c)
-
-    def truncate_hidden(self, state):
-        h,c = state
-        return (h.detach(), c.detach())
 
 
 def make_dataset(
@@ -125,11 +77,11 @@ class System:
 
         vocab_size = len(self.vocab.id_to_string)
 
-        self.model = LM(vocab_size=vocab_size,
-                        emb_dim=args.rnn_size,
-                        hidden_dim=args.rnn_size,
-                        num_layers=args.num_layers,
-                        dropout=args.dropout)
+        self.model = Decoder(vocab_size=vocab_size,
+                             emb_dim=args.rnn_size,
+                             hidden_dim=args.rnn_size,
+                             num_layers=args.num_layers,
+                             dropout=args.dropout)
         self.model = self.model.to(args.device)
 
         if args.init:

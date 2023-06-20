@@ -4,3 +4,5 @@ LibriSpeech/
 __pycache__/
 *.tar.gz
 wandb/
+exp/
+docs/_build/

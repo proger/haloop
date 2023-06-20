@@ -10,6 +10,9 @@ import torch.nn.functional as F
 from . import lora
 from .checkpoint import Checkpointer
 from .attention import GPT
+from .rnn import Encoder, Decoder
+from .resnet import FixupResNet, FixupBasicBlock
+from .recognizer import Recognizer
 
 
 @dataclass
@@ -58,15 +61,51 @@ def load_model(ckpt_path, *, map_location):
     return model
 
 
-def create_model(arch: str):
-    match arch:
-        case 'decoder':
-            gptconf = GPTConfig()
-        case 'encoder':
-            gptconf = GPTConfig(block_size=128, causal=False)
+def create_model(arch: str, compile: bool = True):
+    """
+    Model architectures to initialize. Possible options:
 
-    model = GPT(gptconf)
-    model = torch.compile(model)
+        decoder
+        encoder
+        lstm
+        rnnlm
+        r9
+        recognizer:encoder:vocab_size
+        transducer:encoder:decoder:vocab_size
+    """
+    match arch.split(':'):
+        case ['decoder']:
+            gptconf = GPTConfig()
+            model = GPT(gptconf)
+        case ['encoder']:
+            gptconf = GPTConfig(block_size=128, causal=False)
+            model = GPT(gptconf)
+        case ['lstm']:
+            model = Encoder()
+        case ['rnnlm']:
+            model = Decoder(vocab_size=256,
+                            emb_dim=2048,
+                            hidden_dim=2048,
+                            num_layers=1,
+                            dropout=0.0)
+        case ['r9']:
+            model = FixupResNet(FixupBasicBlock, [5,5,5])
+        case ['recognizer', encoder_arch, vocab_size]:
+            vocab_size = int(vocab_size)
+            model = nn.ModuleDict({
+                'encoder': create_model(encoder_arch, compile=False),
+                'recognizer': Recognizer(feat_dim=1024, vocab_size=vocab_size),
+            })
+        case ['transducer', encoder_arch, decoder_arch, vocab_size]:
+            vocab_size = int(vocab_size)
+            model = nn.ModuleDict({
+                'encoder': create_model(encoder_arch, compile=False),
+                'recognizer': Recognizer(feat_dim=1024, vocab_size=vocab_size),
+                'lm': create_model(decoder_arch, compile=False),
+            })
+
+    if compile:
+        model = torch.compile(model)
     return model
 
 
@@ -80,7 +119,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='hai initializes models', formatter_class=Formatter)
     parser.add_argument('--seed', type=int, default=1337)
-    parser.add_argument('arch', choices=['decoder', 'encoder'], type=str)
+    parser.add_argument('arch', type=str, help=create_model.__doc__)
     parser.add_argument('path', type=Path)
     args = parser.parse_args()
 

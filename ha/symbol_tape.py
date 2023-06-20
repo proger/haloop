@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 import math
 
+from . import xen
+
 
 class Vocabulary:
     def __init__(self, pad_token="·", unk_token="∞"):
@@ -263,6 +265,25 @@ class SymbolTape:
                 batch[:len(part), tape_index] = part
 
         return batch
+
+
+def make_vocab(vocab_descriptor):
+    "Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt"
+
+    match vocab_descriptor.split(':', maxsplit=1):
+        case ["bytes"]:
+            return Vocabulary.bytes()
+        case ["ascii"]:
+            return Vocabulary.ascii()
+        case ["cmu"]:
+            return xen.Vocabulary(add_closures=False)
+        case ["xen"]:
+            return xen.Vocabulary(add_closures=True)
+        case ["words", path]:
+            _, vocab = tokenize_words(path, None)
+            return vocab
+        case _:
+            raise ValueError("Unknown vocabulary descriptor. Possible values: bytes|ascii|cmu|xen|words:path/to/vocab/words.txt")
 
 
 if __name__ == '__main__':

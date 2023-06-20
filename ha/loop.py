@@ -12,12 +12,11 @@ import wandb
 
 from .data import concat_datasets
 from .beam import ctc_beam_search_decode_logits
-from .model import Encoder, CTCRecognizer, StarRecognizer
-from .resnet import FixupResNet, FixupBasicBlock
-from .xen import Vocabulary
+from .init import create_model
+from .recognizer import Recognizer
 from . import symbol_tape
-from .rnnlm import LM
 from .transducer import transducer_forward_score
+from .checkpoint import Checkpointer
 from .ctc import ctc_reduce_mean
 
 
@@ -39,59 +38,21 @@ class Collator:
         return batch_indices, inputs, targets, input_lengths, target_lengths
 
 
-def make_vocab(vocab_descriptor):
-    match vocab_descriptor.split(':', maxsplit=1):
-        case ["bytes"]:
-            return symbol_tape.Vocabulary.bytes()
-        case ["ascii"]:
-            return symbol_tape.Vocabulary.ascii()
-        case ["cmu"]:
-            return Vocabulary(add_closures=False)
-        case ["xen"]:
-            return Vocabulary(add_closures=True)
-        case ["words", path]:
-            _, vocab = symbol_tape.tokenize_words(path, None)
-            return vocab
-        case _:
-            raise ValueError("Unknown vocabulary descriptor. Possible values: bytes|ascii|cmu|xen|words:path/to/vocab/words.txt")
-
-
 class System(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, models):
         super().__init__()
         self.args = args
 
-        match args.encoder:
-            case "lstm":
-                self.encoder = Encoder().to(args.device)
-            case "r9":
-                self.encoder = FixupResNet(FixupBasicBlock, [5,5,5]).to(args.device)
+        self.encoder = models['encoder']
+        self.recognizer: Recognizer = models['recognizer']
+        self.lm = models['lm'] if 'lm' in models else None
+        self.vocab = symbol_tape.make_vocab(args.vocab)
 
-        self.vocab = make_vocab(args.vocab)
-
-        match args.star_penalty:
-            case None:
-                self.recognizer = CTCRecognizer(vocab_size=len(self.vocab)).to(args.device)
-            case star_penalty:
-                self.recognizer = StarRecognizer(star_penalty=star_penalty,
-                                                 vocab_size=len(self.vocab)).to(args.device)    
-
-        if args.lm:
-            lm_checkpoint = torch.load(args.lm, map_location=args.device)
-            self.lm_args = lm_checkpoint['args']
-            self.lm = LM(vocab_size=len(self.vocab),
-                         emb_dim=self.lm_args['rnn_size'],
-                         hidden_dim=self.lm_args['rnn_size'],
-                         num_layers=self.lm_args['num_layers'],
-                         dropout=self.lm_args['dropout']).to(args.device)
-            #self.lm.load_state_dict(lm_checkpoint['model'])
-
+        if self.lm:
             self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
                                                     self.recognizer.parameters(),
                                                     self.lm.parameters()), lr=args.lr)
         else:
-            self.lm_args, self.lm = None, None
-
             self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
                                                     self.recognizer.parameters()), lr=args.lr)
         self.scaler = torch.cuda.amp.GradScaler()
@@ -101,7 +62,9 @@ class System(nn.Module):
         self.recognizer.load_state_dict(checkpoint['recognizer'])
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
-        self.vocab.load_state_dict(checkpoint['vocab'])
+        if 'vocab' in checkpoint:
+            log('loading vocab state')
+            self.vocab.load_state_dict(checkpoint['vocab'])
         if self.lm is not None:
             log('loading transducer lm')
             self.lm.load_state_dict(checkpoint['lm'])
@@ -113,12 +76,19 @@ class System(nn.Module):
             'scaler': self.scaler.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'vocab': self.vocab.state_dict(),
-            'lm_args': self.lm_args,
             'lm': self.lm.state_dict() if self.lm is not None else None,
+            'loop_args': self.args,
         } | extra
 
+    def subsampled_lengths(self, input_lengths):
+        if hasattr(self.encoder, 'subsampled_lengths'):
+            return self.encoder.subsampled_lengths(input_lengths)
+        else:
+            return input_lengths
+
     def forward(self, inputs, targets, input_lengths, target_lengths):
-        device = self.args.device
+        args = self.args
+        device = args.device
 
         N, _, _ = inputs.shape
         inputs = inputs.to(device) # (N, T, C)
@@ -128,7 +98,7 @@ class System(nn.Module):
 
         #log(inputs, targets) # works best with --batch-size 1
 
-        input_lengths = self.encoder.subsampled_lengths(input_lengths)
+        input_lengths = self.subsampled_lengths(input_lengths)
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             outputs = self.encoder(inputs) # (N1, T, C)
@@ -163,7 +133,7 @@ class System(nn.Module):
                 #
                 # All outputs are independent
                 #
-                loss, logits = self.recognizer(outputs, targets, input_lengths, target_lengths)
+                loss, logits = self.recognizer(outputs, targets, input_lengths, target_lengths, star_penalty=args.star_penalty)
 
         return loss, outputs, logits
 
@@ -279,21 +249,24 @@ def make_parser():
 
     parser = argparse.ArgumentParser(formatter_class=Formatter)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
-    parser.add_argument('--save', type=Path, default='ckpt.pt', help="Path to save checkpoint to")
-    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
-    parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
+    parser.add_argument('--arch', type=str, default='recognizer:lstm:128', help=create_model.__doc__)
+    parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt")
+    parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
+
+    parser.add_argument('--save', type=Path, default='ckpt.pt', help="Path to save checkpoint to")
+    parser.add_argument('--always-save-checkpoint', action='store_true', help='If True, always save a checkpoint after each evaluation')
+    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
+
+    parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
+    parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
+    parser.add_argument('--clip-grad-norm', type=float, default=0.1, help="Clip gradient norm to this value")
+
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
-    parser.add_argument('--encoder', type=str, default='lstm', choices=['lstm', 'r9'], help="Encoder to use: unidirectional LSTM or ResNet")
-    parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
-    parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
-    parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt")
-    parser.add_argument('--lm', type=Path, help="Path to language model checkpoint trained with hal.")
-    parser.add_argument('--clip-grad-norm', type=float, default=0.1, help="Clip gradient norm to this value")
     return parser
 
 
@@ -303,7 +276,8 @@ def main():
 
     torch.manual_seed(3407)
 
-    system = System(args)
+    models = create_model(args.arch, compile=args.compile).to(args.device)
+    system = System(args, models)
 
     valid_loader = torch.utils.data.DataLoader(
         concat_datasets(args.eval),
@@ -336,15 +310,16 @@ def main():
             drop_last=True
         )
 
-        best_valid_loss = float('inf')
+        checkpoint = Checkpointer(path=args.save, save_all=args.always_save_checkpoint)
+
         for epoch in range(args.num_epochs):
             system.train_one_epoch(epoch, train_loader)
 
             valid_loss = system.evaluate(epoch, valid_loader)
-            if valid_loss < best_valid_loss:
-                best_valid_loss = valid_loss
-                log('saving model', args.save)
-                torch.save(system.make_state_dict(best_valid_loss=best_valid_loss, epoch=epoch), args.save)
+            checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict({
+                'best_valid_loss': valid_loss,
+                'epoch': epoch,
+            }))
     else:
         system.evaluate(-100, valid_loader)
 
