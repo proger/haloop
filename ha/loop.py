@@ -15,6 +15,7 @@ from .beam import ctc_beam_search_decode_logits
 from .init import create_model
 from .recognizer import Recognizer
 from . import symbol_tape
+from .lr import LR
 from .transducer import transducer_forward_score
 from .checkpoint import Checkpointer
 from .ctc import ctc_reduce_mean
@@ -56,6 +57,7 @@ class System(nn.Module):
             self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
                                                     self.recognizer.parameters()), lr=args.lr)
         self.scaler = torch.cuda.amp.GradScaler()
+        self.lr = LR(args)
 
     def load_state_dict(self, checkpoint):
         self.encoder.load_state_dict(checkpoint['encoder'])
@@ -147,15 +149,16 @@ class System(nn.Module):
         train_loss = 0.
         t0 = time.time()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
+            global_step = i + epoch * len(train_loader)
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
-                log(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
+                log(f'[{epoch + 1}, {global_step:5d}], loss is nan, skipping batch', flush=True)
                 scaler.update()
                 continue
 
             if torch.isinf(loss):
-                log(f'[{epoch + 1}, {i + 1:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
+                log(f'[{epoch + 1}, {global_step:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
                 continue
 
             scaler.scale(loss).backward()
@@ -164,10 +167,12 @@ class System(nn.Module):
             if self.lm:
                 grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), self.args.clip_grad_norm))
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
-                log(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
+                log(f'[{epoch + 1}, {global_step:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 continue
+
+            lr = self.lr.apply_lr_(optimizer, global_step)
 
             scaler.step(optimizer)
             scaler.update()
@@ -177,8 +182,8 @@ class System(nn.Module):
             if i and i % self.args.log_interval == 0:
                 train_loss = train_loss / self.args.log_interval
                 t1 = time.time()
-                log(f'[{epoch + 1}, {i + 1:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f}', flush=True)
-                wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm})
+                log(f'[{epoch + 1}, {global_step:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f} lr: {lr:.5f}', flush=True)
+                wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm, 'train/lr': lr})
                 t0 = t1
                 train_loss = 0.
 
@@ -260,7 +265,9 @@ def make_parser():
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
-    parser.add_argument('--lr', type=float, default=3e-4, help="Adam learning rate")
+
+    LR.add_arguments(parser)
+
     parser.add_argument('--star-penalty', type=float, default=None, help="Star penalty for Star CTC. If None, train with regular CTC")
     parser.add_argument('--clip-grad-norm', type=float, default=0.1, help="Clip gradient norm to this value")
 
@@ -276,7 +283,7 @@ def main():
 
     torch.manual_seed(3407)
 
-    models = create_model(args.arch, compile=args.compile).to(args.device)
+    models = create_model(args.arch, compile=False).to(args.device)
     system = System(args, models)
 
     valid_loader = torch.utils.data.DataLoader(
@@ -310,13 +317,15 @@ def main():
             drop_last=True
         )
 
+        log('total training iterations:', len(train_loader) * args.num_epochs)
+
         checkpoint = Checkpointer(path=args.save, save_all=args.always_save_checkpoint)
 
         for epoch in range(args.num_epochs):
             system.train_one_epoch(epoch, train_loader)
 
             valid_loss = system.evaluate(epoch, valid_loader)
-            checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict({
+            checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict(**{
                 'best_valid_loss': valid_loss,
                 'epoch': epoch,
             }))

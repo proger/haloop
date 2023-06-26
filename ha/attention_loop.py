@@ -17,11 +17,12 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
-from .init import load_model
 from . import lora
-from .optim import configure_optimizers
 from .checkpoint import construct_path_suffix, Checkpointer
+from .init import load_model
+from .lr import LR
 from .mlm import mask_tokens
+from .optim import configure_optimizers
 
 
 class Formatter(argparse.ArgumentDefaultsHelpFormatter,
@@ -57,10 +58,7 @@ parser.add_argument("--beta1", type=float, default=0.9, help="Beta1 for AdamW op
 parser.add_argument("--beta2", type=float, default=0.99, help="Beta2 for AdamW optimizer")
 
 # lr schedule
-parser.add_argument("--lr_schedule", type=str, choices=["const", "cosine"], default="cosine", help="Learning rate schedule")
-parser.add_argument("--warmup_iters", type=int, default=2000, help="Number of warm-up steps")
-parser.add_argument("--lr_decay_iters", type=int, default=200000, help="Number of steps for learning rate decay")
-parser.add_argument("--min_lr", type=float, default=6e-5, help="Minimum learning rate")
+LR.add_arguments(parser)
 
 parser.add_argument("--backend", type=str, default="nccl", help="DDP backend")
 parser.add_argument("--device", type=str, default="cuda:1", help="Device for training")
@@ -193,24 +191,7 @@ def evaluate():
     model.train()
     return losses.mean()
 
-
-if args.lr_schedule == "cosine":
-    # learning rate decay scheduler (cosine with warmup)
-    def get_lr(it):
-        # 1) linear warmup for warmup_iters steps
-        if it < args.warmup_iters:
-            return args.learning_rate * it / args.warmup_iters
-        # 2) if it > lr_decay_iters, return min learning rate
-        if it > args.lr_decay_iters:
-            return args.min_lr
-        # 3) in between, use cosine decay down to min learning rate
-        decay_ratio = (it - args.warmup_iters) / (args.lr_decay_iters - args.warmup_iters)
-        assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
-        return args.min_lr + coeff * (args.learning_rate - args.min_lr)
-else:
-    def get_lr(_):
-        return args.learning_rate
+lr_ctl = LR(args)
 
 if args.wandb and master_process:
     import wandb
@@ -226,12 +207,6 @@ if master_process:
 
 t0 = time.time()
 while args.train:
-
-    # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
     for micro_step in range(args.gradient_accumulation_steps):
@@ -252,6 +227,8 @@ while args.train:
     if torch.isnan(loss):
         print("loss is NaN, skipping this update")
         continue
+
+    lr = lr_ctl.apply_lr_(optimizer, iter_num)
 
     log_dict = {}
 
