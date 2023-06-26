@@ -5,16 +5,19 @@ import torchaudio
 from kaldialign import align
 
 
-def make_frames(wav):
-    frames = torchaudio.compliance.kaldi.mfcc(wav)
+def make_frames(wav, op='fbank'):
+    if op == 'mfcc':
+        frames = torchaudio.compliance.kaldi.mfcc(wav)
 
-    # utterance-level CMVN
-    frames -= frames.mean(dim=0)
-    frames /= frames.std(dim=0)
-
-    # frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
-    # frames += 8.
-    # frames /= 4.
+        # utterance-level CMVN
+        frames -= frames.mean(dim=0)
+        frames /= frames.std(dim=0)
+    elif op == 'fbank':
+        frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
+        #frames += 8.
+        #frames /= 4.
+    else:
+        assert False
 
     return frames # (T, F)
 
@@ -156,3 +159,13 @@ def concat_datasets(s):
         for path, part in zip(paths, parts)
     )
 
+
+if __name__ == '__main__':
+    import sys
+    for i, f, t in make_dataset(sys.argv[1]):
+        print(i, f.mean(dim=0), f.std(dim=0), f.shape, t)
+        break
+    m,s = torch.zeros(80), torch.zeros(80)
+    frames = torch.cat([f for i, f, t in make_dataset(sys.argv[1])], dim=0)
+    print(f.mean(dim=0))
+    print(f.std(dim=0))

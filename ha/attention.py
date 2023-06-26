@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from . import lora
 
 def new_gelu(x):
     """
@@ -28,6 +27,38 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
+
+def attend(q, k, v, past=None, measure_entropy=False, is_causal=False, dropout_p=0.0):
+    T = q.size(-2)
+
+    if past is not None:
+        k_cache, v_cache = past
+        k, v = torch.cat([k_cache, k], dim=-2), torch.cat([v_cache, v], dim=-2)
+
+    if past is not None or measure_entropy:
+        # (B, nh, T, hs) x (B, nh, hs, T') -> (B, nh, T, T')
+        att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
+
+        if is_causal:
+            # future tokens attend to the past: apply triangular mask
+            bias = k.new_ones(k.size(-2), k.size(-2)).tril()
+            # account for cache shift
+            bias = bias[-T:]
+            att = att.masked_fill(bias[None, None, :, :] == 0, float('-inf'))
+
+        att = att.softmax(dim=-1) # (B, nh, T, T')
+
+        # measure attention entropy
+        att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
+
+        # attend
+        y = att @ v # (B, nh, T, T') x (B, nh, T', hs) -> (B, nh, T, hs)
+    else:
+        y = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, is_causal=is_causal)
+        att_entropy = -1.
+
+    return y, att_entropy
 
 
 class MonitoredSelfAttention(nn.Module):
@@ -56,31 +87,7 @@ class MonitoredSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T', hs)
 
-        if past is not None:
-            k_cache, v_cache = past
-            k, v = torch.cat([k_cache, k], dim=-2), torch.cat([v_cache, v], dim=-2)
-
-        if past is not None or measure_entropy:
-            # (B, nh, T, hs) x (B, nh, hs, T') -> (B, nh, T, T')
-            att = (q @ k.transpose(-2, -1)) * (1.0 / (k.size(-1)**0.5))
-
-            if self.causal:
-                # future tokens attend to the past: apply triangular mask
-                bias = x.new_ones(k.size(-2), k.size(-2)).tril()
-                # account for cache shift
-                bias = bias[-T:]
-                att = att.masked_fill(bias[None, None, :, :] == 0, float('-inf'))
-
-            att = att.softmax(dim=-1) # (B, nh, T, T')
-
-            # measure attention entropy
-            att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
-
-            # attend
-            y = att @ v # (B, nh, T, T') x (B, nh, T', hs) -> (B, nh, T, hs)
-        else:
-            y = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout, is_causal=self.causal)
-            att_entropy = -1.
+        y, att_entropy = attend(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal, dropout_p=self.dropout)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 

@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from . import lora
 from .checkpoint import Checkpointer
 from .attention import GPT
+from .attention_audio import AudioEncoder
 from .rnn import Encoder, Decoder
 from .resnet import FixupResNet, FixupBasicBlock
 from .recognizer import Recognizer
@@ -26,12 +27,26 @@ class GPTConfig:
     bias: bool = False
     stable_embedding: bool = False
     causal: bool = True
+    cross_attn: bool = False
+    d_input: int = 1
+
+    def state_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class AudioEncoderConfig(GPTConfig):
+    block_size: int = 2048
+    vocab_size: int = 128 # assume ascii
+    causal: bool = False
+    cross_attn: bool = False
+    d_input: int = 80
 
     def state_dict(self):
         return asdict(self)
 
     
-def load_model(ckpt_path, *, map_location):
+def load_model(ckpt_path, *, map_location='cpu'):
     checkpoint = torch.load(ckpt_path, map_location=map_location)
 
     if not 'vocab_size' in checkpoint['model_args']:
@@ -70,6 +85,7 @@ def create_model(arch: str, compile: bool = True):
         lstm
         rnnlm
         r9
+        audio-encoder
         recognizer:encoder:vocab_size
         transducer:encoder:decoder:vocab_size
     """
@@ -90,6 +106,13 @@ def create_model(arch: str, compile: bool = True):
                             dropout=0.0)
         case ['r9']:
             model = FixupResNet(FixupBasicBlock, [5,5,5])
+        case ['audio-encoder']:
+            config = AudioEncoderConfig()
+            encoder = AudioEncoder(config)
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+            })
         case ['recognizer', encoder_arch, vocab_size]:
             vocab_size = int(vocab_size)
             model = nn.ModuleDict({
@@ -127,11 +150,14 @@ def main():
     model = create_model(args.arch)
     print('creating a new model')
     print(model)
-    print(model.config)
-    Checkpointer(args.path, save_all=True)(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: {
-        'model': model.state_dict(),
-        'model_args': model.config.state_dict()
-    })
+    if hasattr(model, 'config'):
+        print(model.config)
+        Checkpointer(args.path, save_all=True)(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: {
+            'model': model.state_dict(),
+            'model_args': model.config.state_dict()
+        })
+    else:
+        Checkpointer(args.path, save_all=True)(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: model.state_dict())
 
 
 if __name__ == '__main__':
