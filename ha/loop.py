@@ -213,12 +213,16 @@ class System(nn.Module):
                 #hyp1 = vocabulary.decode(filter(None, decoded_seqs[0]))
 
                 ref1 = vocabulary.decode(ref)
-                ali = vocabulary.decode(ali.tolist())
 
                 dist = edit_distance(hyp1, ref1)
                 dist['length'] = len(ref1)
                 dist['ler'] = round(dist['total'] / dist['length'], 2)
                 lers.append(dist['ler'])
+
+                if self.args.quiet:
+                    continue
+
+                ali = vocabulary.decode(ali.tolist())
 
                 if isinstance(ref1, list):
                     star = '␣'
@@ -273,6 +277,7 @@ def make_parser():
 
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
+    parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     return parser
 
