@@ -153,12 +153,12 @@ class System(nn.Module):
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
-                log(f'[{epoch + 1}, {global_step:5d}], loss is nan, skipping batch', flush=True)
+                log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
                 scaler.update()
                 continue
 
             if torch.isinf(loss):
-                log(f'[{epoch + 1}, {global_step:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
+                log(f'[{epoch}, {global_step:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
                 continue
 
             scaler.scale(loss).backward()
@@ -167,7 +167,7 @@ class System(nn.Module):
             if self.lm:
                 grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), self.args.clip_grad_norm))
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
-                log(f'[{epoch + 1}, {global_step:5d}], grad_norm is inf or nan, skipping batch', flush=True)
+                log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 continue
@@ -182,8 +182,8 @@ class System(nn.Module):
             if i and i % self.args.log_interval == 0:
                 train_loss = train_loss / self.args.log_interval
                 t1 = time.time()
-                log(f'[{epoch + 1}, {global_step:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f} lr: {lr:.5f}', flush=True)
-                wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm, 'train/lr': lr})
+                log(f'[{epoch}, {global_step:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f} lr: {lr:.5f}', flush=True)
+                wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm, 'train/lr': lr, 'iter': global_step})
                 t0 = t1
                 train_loss = 0.
 
@@ -245,7 +245,7 @@ class System(nn.Module):
 
         count = i + 1
         ler = round(sum(lers) / len(lers), 3)
-        log(f'valid [{epoch + 1}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f}', flush=True)
+        log(f'valid [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f}', flush=True)
         if wandb.run is not None:
             wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler})
         return valid_loss / count
@@ -258,6 +258,7 @@ def make_parser():
 
     parser = argparse.ArgumentParser(formatter_class=Formatter)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
+    parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
     parser.add_argument('--arch', type=str, default='recognizer:lstm:128', help=create_model.__doc__)
     parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
@@ -299,9 +300,12 @@ def main():
         num_workers=args.num_workers,
     )
 
+    epoch = 0
     if args.init:
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
+        if not args.reset:
+            epoch = checkpoint.get('epoch', -1) + 1
     else:
         log('initializing randomly')
 
@@ -326,7 +330,7 @@ def main():
 
         checkpoint = Checkpointer(path=args.save, save_all=args.always_save_checkpoint)
 
-        for epoch in range(args.num_epochs):
+        for epoch in range(epoch, args.num_epochs):
             system.train_one_epoch(epoch, train_loader)
 
             valid_loss = system.evaluate(epoch, valid_loader)
