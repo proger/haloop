@@ -111,17 +111,57 @@ class MLP(nn.Module):
         return x
 
 
+from flash_attn.modules.mha import MHA
+
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = MonitoredSelfAttention(config)
+        if False:
+            self.attn = MonitoredSelfAttention(config)
+        else:
+            self.attn = MHA(
+                embed_dim=config.n_embd,
+                num_heads=config.n_head,
+                cross_attn=False,
+                qkv_proj_bias=config.bias,
+                out_proj_bias=config.bias,
+                dropout=config.dropout,
+                causal=config.causal,
+                rotary_emb_dim=config.rotary_emb_dim,
+                use_flash_attn=True
+            )
+        if config.cross_attn:
+            self.cross_attn = MonitoredSelfAttention(config)
+            self.cross_attn_ln = LayerNorm(config.n_embd, bias=config.bias)
+        else:
+            self.cross_attn = None
+            self.cross_attn_ln = None
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
     def forward(self, x, past=None, measure_entropy=False):
-        x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, measure_entropy=measure_entropy)
-        x = x + x_attn
+        if self.cross_attn is not None:
+            self_past, cross_past = past
+
+            x_attn, att_entropy, present = self.attn(self.ln_1(x), past=self_past, measure_entropy=measure_entropy)
+            x = x + x_attn
+
+            cross_x_attn, cross_att_entropy, cross_present = self.cross_attn(self.cross_attn_ln(x), past=cross_past, measure_entropy=measure_entropy)
+            x = x + cross_x_attn
+
+            present = torch.stack([present, cross_present])
+            if measure_entropy:
+                att_entropy = torch.stack([att_entropy, cross_att_entropy])
+        else:
+            if False:
+                x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, measure_entropy=measure_entropy)
+            else:
+                x_attn = self.attn(self.ln_1(x))
+                present = None
+                att_entropy = 0.
+            x = x + x_attn
+
         x = x + self.mlp(self.ln_2(x))
         return x, att_entropy, present
 

@@ -29,6 +29,7 @@ class GPTConfig:
     causal: bool = True
     cross_attn: bool = False
     d_input: int = 1
+    rotary_emb_dim: int = 0
 
     def state_dict(self):
         return asdict(self)
@@ -41,6 +42,7 @@ class AudioEncoderConfig(GPTConfig):
     causal: bool = False
     cross_attn: bool = False
     d_input: int = 80
+    rotary_emb_dim: int = 64
 
     def state_dict(self):
         return asdict(self)

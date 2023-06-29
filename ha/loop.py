@@ -60,10 +60,21 @@ class System(nn.Module):
         self.lr = LR(args)
 
     def load_state_dict(self, checkpoint):
-        self.encoder.load_state_dict(checkpoint['encoder'])
+        encoder = {}
+        for key in checkpoint['encoder']:
+            if 'attn.c_attn.weight' in key:
+                l, _, _ = key.rsplit('.', maxsplit=2)
+                encoder[l + '.Wqkv.weight'] = checkpoint['encoder'][key]
+            elif 'attn.c_proj.weight' in key:
+                l, _, _ = key.rsplit('.', maxsplit=2)
+                encoder[l + '.out_proj.weight'] = checkpoint['encoder'][key]
+            else:
+                encoder[key] = checkpoint['encoder'][key]
+
+        self.encoder.load_state_dict(encoder, strict=False)
         self.recognizer.load_state_dict(checkpoint['recognizer'])
         self.scaler.load_state_dict(checkpoint['scaler'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        #self.optimizer.load_state_dict(checkpoint['optimizer'])
         if 'vocab' in checkpoint:
             log('loading vocab state')
             self.vocab.load_state_dict(checkpoint['vocab'])
