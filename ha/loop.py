@@ -100,7 +100,7 @@ class System(nn.Module):
 
         #log(inputs, targets) # works best with --batch-size 1
 
-        input_lengths = self.subsampled_lengths(input_lengths)
+        logit_lengths = self.subsampled_lengths(input_lengths)
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             outputs = self.encoder(inputs) # (N1, T, C)
@@ -122,12 +122,12 @@ class System(nn.Module):
                 joint = outputs[:, :, None, :] + lm_outputs[:, None, :, :] # (N, T, U1, C)
                 #joint = joint.log_softmax(dim=-1)
 
-                #loss = ctc_reduce_mean(transducer_forward_score(joint, targets, input_lengths, target_lengths), target_lengths)
+                #loss = ctc_reduce_mean(transducer_forward_score(joint, targets, logit_lengths, target_lengths), target_lengths)
 
                 from torchaudio.functional import rnnt_loss
                 loss = rnnt_loss(joint,
                                  targets.to(torch.int32),
-                                 input_lengths.to(torch.int32),
+                                 logit_lengths.to(torch.int32),
                                  target_lengths.to(torch.int32),
                                  blank=0, reduction='mean', fused_log_softmax=True)
                 logits = joint # FIXME:
@@ -135,9 +135,9 @@ class System(nn.Module):
                 #
                 # All outputs are independent
                 #
-                loss, logits = self.recognizer(outputs, targets, input_lengths, target_lengths, star_penalty=args.star_penalty)
+                loss, logits = self.recognizer(outputs, targets, logit_lengths, target_lengths, star_penalty=args.star_penalty)
 
-        return loss, outputs, logits
+        return loss, outputs, logits, logit_lengths
 
     def train_one_epoch(self, epoch, train_loader):
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
@@ -150,7 +150,7 @@ class System(nn.Module):
         t0 = time.time()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             global_step = i + epoch * len(train_loader)
-            loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, _, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
                 log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
@@ -193,16 +193,19 @@ class System(nn.Module):
 
         valid_loss = 0.
         lers = []
+        wers = []
 
         encoder.eval()
         recognizer.eval()
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
-            loss, outputs, logits = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, outputs, logits, logit_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
 
             valid_loss += loss.item()
 
-            for dataset_index, ref, ref_len, seq, hyp_len in zip(dataset_indices, targets, target_lengths, logits, input_lengths):
-                seq = seq[:hyp_len].cpu()
+            for dataset_index, ref, ref_len, seq, seq_len in zip(dataset_indices, targets, target_lengths, logits, logit_lengths):
+                stat = {'frames': seq_len.item()}
+
+                seq = seq[:seq_len].cpu()
                 ref = ref[:ref_len].cpu().tolist()
                 ali = seq.argmax(dim=-1)
 
@@ -214,10 +217,18 @@ class System(nn.Module):
 
                 ref1 = vocabulary.decode(ref)
 
-                dist = edit_distance(hyp1, ref1)
-                dist['length'] = len(ref1)
-                dist['ler'] = round(dist['total'] / dist['length'], 2)
-                lers.append(dist['ler'])
+                stat |= edit_distance(hyp1, ref1)
+                stat['length'] = len(ref1)
+                ler = stat['total'] / stat['length']
+                stat['ler'] = round(ler, 2)
+                lers.append(ler)
+
+                ref_words = ref1.split()
+                word_len = len(ref_words)
+                word_dist = edit_distance(hyp1.split(), ref_words)
+                wer = word_dist['total'] / word_len
+                stat['wer'] = round(wer, 2)
+                wers.append(wer)
 
                 if self.args.quiet:
                     continue
@@ -241,13 +252,14 @@ class System(nn.Module):
                 print(epoch, dataset_index, 'hyp', self.vocab.format(hyp), sep="\t", flush=True)
                 print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
                 print(epoch, dataset_index, 'ali', self.vocab.format(ali), sep="\t", flush=True)
-                print(epoch, dataset_index, 'stat', dist, sep="\t", flush=True)
+                print(epoch, dataset_index, 'stat', stat, sep="\t", flush=True)
 
         count = i + 1
         ler = round(sum(lers) / len(lers), 3)
-        log(f'valid [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f}', flush=True)
+        wer = round(sum(wers) / len(wers), 3)
+        log(f'valid [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f} wer: {wer:.3f}', flush=True)
         if wandb.run is not None:
-            wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler})
+            wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler, 'valid/wer': wer})
         return valid_loss / count
 
 
