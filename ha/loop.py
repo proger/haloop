@@ -362,7 +362,7 @@ def main():
                 'epoch': epoch,
             }))
     else:
-        system.evaluate(-100, valid_loader)
+        system.evaluate(epoch, valid_loader)
 
 if __name__ == '__main__':
     main()
