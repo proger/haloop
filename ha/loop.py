@@ -1,8 +1,9 @@
 import argparse
-import time
+from collections import Counter
 from itertools import chain
 from pathlib import Path
 import sys
+import time
 
 import torch
 import torch.nn as nn
@@ -203,8 +204,8 @@ class System(nn.Module):
         encoder, recognizer, vocabulary = self.encoder, self.recognizer, self.vocab
 
         valid_loss = 0.
-        lers = []
-        wers = []
+        label_errors = Counter()
+        word_errors = Counter()
 
         encoder.eval()
         recognizer.eval()
@@ -214,7 +215,7 @@ class System(nn.Module):
             valid_loss += loss.item()
 
             for dataset_index, ref, ref_len, seq, seq_len in zip(dataset_indices, targets, target_lengths, logits, logit_lengths):
-                stat = {'frames': seq_len.item()}
+                stat = {'logits': seq_len.item()}
 
                 seq = seq[:seq_len].cpu()
                 ref = ref[:ref_len].cpu().tolist()
@@ -232,14 +233,14 @@ class System(nn.Module):
                 stat['length'] = len(ref1)
                 ler = stat['total'] / stat['length']
                 stat['ler'] = round(ler, 2)
-                lers.append(ler)
+                label_errors += Counter(stat)
 
                 ref_words = ref1.split()
-                word_len = len(ref_words)
                 word_dist = edit_distance(hyp1.split(), ref_words)
-                wer = word_dist['total'] / word_len
+                word_dist['length'] = len(ref_words)
+                wer = word_dist['total'] / word_dist['length']
                 stat['wer'] = round(wer, 2)
-                wers.append(wer)
+                word_errors += Counter(word_dist)
 
                 if self.args.quiet:
                     continue
@@ -266,8 +267,8 @@ class System(nn.Module):
                 print(epoch, dataset_index, 'stat', stat, sep="\t", flush=True)
 
         count = i + 1
-        ler = round(sum(lers) / len(lers), 3)
-        wer = round(sum(wers) / len(wers), 3)
+        ler = round(label_errors['total'] / label_errors['length'], 3)
+        wer = round(word_errors['total'] / word_errors['length'], 3)
         log(f'valid [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f} wer: {wer:.3f}', flush=True)
         if wandb.run is not None:
             wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler, 'valid/wer': wer})
