@@ -24,16 +24,24 @@ class AudioEncoder(nn.Module):
         self.conv_pre = nn.Conv1d(config.d_input, config.n_embd, kernel_size=3, stride=1, padding=1)
         self.conv_subsample = nn.Conv1d(config.n_embd, config.n_embd, kernel_size=3, stride=2, padding=1)
 
-        self.transformer = nn.ModuleDict(dict(
-            #wpe = nn.Embedding(config.block_size, config.n_embd),
+        if config.rotary_emb_dim:
+            self.transformer = nn.ModuleDict(dict(
+                drop = nn.Dropout(config.dropout),
+                h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+                ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ))
 
-            drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
-        ))
+        else:
+            self.transformer = nn.ModuleDict(dict(
+                wpe = nn.Embedding(config.block_size, config.n_embd),
 
-        #self.transformer.wpe.weight.data = sinusoids(config.block_size, config.n_embd)
-        #self.transformer.wpe.requires_grad_(False)
+                drop = nn.Dropout(config.dropout),
+                h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+                ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            ))
+
+            self.transformer.wpe.weight.data = sinusoids(config.block_size, config.n_embd)
+            self.transformer.wpe.requires_grad_(False)
 
     def subsampled_lengths(self, input_lengths):
         # https://github.com/vdumoulin/conv_arithmetic
@@ -50,9 +58,11 @@ class AudioEncoder(nn.Module):
 
         _, t, c = x.size()
         pos = torch.arange(0, t, dtype=torch.long, device=x.device).unsqueeze(0) # shape (1, t)
-        #pe = self.transformer.wpe(pos)
-        #x = self.transformer.drop(x + pe) # shape (b, t, c)
-        x = self.transformer.drop(x) # shape (b, t, c)
+        if self.config.rotary_emb_dim:
+            x = self.transformer.drop(x) # shape (b, t, c)
+        else:
+            pe = self.transformer.wpe(pos)
+            x = self.transformer.drop(x + pe) # shape (b, t, c)
 
         for i, block in enumerate(self.transformer.h):
             x, _att_entropy, _present = block(x, past=None, measure_entropy=measure_entropy)

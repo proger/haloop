@@ -110,6 +110,14 @@ def create_model(arch: str, compile: bool = True):
             model = FixupResNet(FixupBasicBlock, [5,5,5])
         case ['audio-encoder']:
             config = AudioEncoderConfig()
+            config.rotary_emb_dim = 0
+            encoder = AudioEncoder(config)
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+            })
+        case ['audio-encoder-rotary']:
+            config = AudioEncoderConfig()
             encoder = AudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,

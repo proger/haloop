@@ -117,7 +117,8 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        if False:
+        self._rotary_emb_dim = config.rotary_emb_dim
+        if not self._rotary_emb_dim:
             self.attn = MonitoredSelfAttention(config)
         else:
             self.attn = MHA(
@@ -154,7 +155,7 @@ class Block(nn.Module):
             if measure_entropy:
                 att_entropy = torch.stack([att_entropy, cross_att_entropy])
         else:
-            if False:
+            if not self._rotary_emb_dim:
                 x_attn, att_entropy, present = self.attn(self.ln_1(x), past=past, measure_entropy=measure_entropy)
             else:
                 x_attn = self.attn(self.ln_1(x))

@@ -119,7 +119,7 @@ class System(nn.Module):
 
             if self.lm is not None:
                 #
-                # Output dependencies are controller by LM
+                # Output dependencies are controlled by LM
                 #
                 hidden = self.lm.init_hidden(N)
 
