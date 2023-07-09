@@ -29,7 +29,7 @@ class StridingAudioEncoder(nn.Module):
         conv.append(nn.Conv1d(d_input, config.n_embd, kernel_size=3, stride=config.conv_strides[-1], padding=1))
         self.conv = nn.ModuleList(conv)
 
-        assert config.rotary_emb_dim:
+        assert config.rotary_emb_dim
         self.transformer = nn.ModuleDict(dict(
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
