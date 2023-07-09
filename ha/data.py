@@ -61,14 +61,14 @@ class Directory(torch.utils.data.Dataset):
 class LibriSpeech(torch.utils.data.Dataset):
     def __init__(self, url='train-clean-100'):
         super().__init__()
-        self.librispeech = torchaudio.datasets.LIBRISPEECH('.', url=url, download=True)
+        self.librispeech = torchaudio.datasets.LIBRISPEECH('data', url=url, download=True)
 
     def __len__(self):
         return len(self.librispeech)
 
     def utt_id(self, index):
         wav, sr, text, speaker_id, chapter_id, utterance_id = self.librispeech[index]
-        utt_id = f'{speaker_id}-{chapter_id}-{utterance_id}'
+        utt_id = f'{speaker_id}-{chapter_id}-{utterance_id:04d}'
         return utt_id
 
     def __getitem__(self, index):
@@ -94,7 +94,7 @@ class Mask(torch.utils.data.Dataset):
 
         frames = torchaudio.functional.mask_along_axis_iid(
             frames,
-            mask_param=2, # mask a little bit as we have only 13 components
+            mask_param=16,
             mask_value=0,
             axis=3 # frequency
         )
@@ -102,7 +102,7 @@ class Mask(torch.utils.data.Dataset):
         frames = torchaudio.functional.mask_along_axis_iid(
             frames,
             mask_param=7,
-            mask_value=0,   
+            mask_value=0,
             axis=2 # time
         )
 
