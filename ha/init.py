@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from . import lora
 from .checkpoint import Checkpointer
 from .attention import GPT
-from .attention_audio import AudioEncoder
+from .attention_audio import AudioEncoder, StridingAudioEncoder
 from .rnn import Encoder, Decoder
 from .resnet import FixupResNet, FixupBasicBlock
 from .recognizer import Recognizer
@@ -44,10 +44,20 @@ class AudioEncoderConfig(GPTConfig):
     d_input: int = 80
     rotary_emb_dim: int = 64
 
-    def state_dict(self):
-        return asdict(self)
 
-    
+@dataclass
+class StridingAudioEncoderConfig(GPTConfig):
+    block_size: int = 2048
+    vocab_size: int = 16384 # assume bpe
+    causal: bool = False
+    cross_attn: bool = False
+    d_input: int = 80
+    rotary_emb_dim: int = 64
+    d_conv: int = 256
+    conv_strides = (2,2,2)
+
+
+
 def load_model(ckpt_path, *, map_location='cpu'):
     checkpoint = torch.load(ckpt_path, map_location=map_location)
 
@@ -119,6 +129,27 @@ def create_model(arch: str, compile: bool = True):
         case ['audio-encoder-rotary']:
             config = AudioEncoderConfig()
             encoder = AudioEncoder(config)
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+            })
+        case ['audio-encoder-rotary-dropout']:
+            config = AudioEncoderConfig(dropout=0.1)
+            encoder = AudioEncoder(config)
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+            })
+        case ['audio-encoder-rotary-dropout-e8']:
+            config = AudioEncoderConfig(dropout=0.1, n_layer=8)
+            encoder = AudioEncoder(config)
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+            })
+        case ['striding-e8']:
+            config = StridingAudioEncoderConfig(dropout=0.1, n_layer=8)
+            encoder = StridingAudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,
                 'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
