@@ -58,7 +58,7 @@ def attend(q, k, v, past=None, measure_entropy=False, is_causal=False, dropout_p
         y = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p, is_causal=is_causal)
         att_entropy = -1.
 
-    return y, att_entropy
+    return y, k, v, att_entropy
 
 
 class MonitoredSelfAttention(nn.Module):
@@ -87,7 +87,7 @@ class MonitoredSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T', hs)
 
-        y, att_entropy = attend(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal, dropout_p=self.dropout)
+        y, k, v, att_entropy = attend(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal, dropout_p=self.dropout)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
