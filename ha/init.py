@@ -100,6 +100,7 @@ def create_model(arch: str, compile: bool = True):
         audio-encoder
         recognizer:encoder:vocab_size
         rnn-transducer:encoder:vocab_size
+        audio-transformer
     """
     match arch.split(':'):
         case ['decoder']:
@@ -166,6 +167,24 @@ def create_model(arch: str, compile: bool = True):
                 'encoder': create_model(encoder_arch, compile=False),
                 'recognizer': Transducer(feat_dim=1024, vocab_size=vocab_size),
             })
+        case ['audio-transformer']:
+            config = AudioEncoderConfig(dropout=0.1, n_layer=8)
+            encoder = AudioEncoder(config)
+            from ha.transformer import Decoder
+            head_dim = config.n_embd // config.n_head
+            decoder = Decoder(
+                context=config.block_size,
+                vocab=config.vocab_size,
+                head_dim=head_dim,
+                heads=config.n_head,
+                p_drop=config.dropout,
+                layers=8
+            )
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': decoder,
+            })
+
 
     if compile:
         model = torch.compile(model)
