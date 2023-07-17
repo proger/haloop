@@ -12,14 +12,11 @@ from kaldialign import edit_distance, align
 import wandb
 
 from .data import concat_datasets
-from .beam import ctc_beam_search_decode_logits
 from .init import create_model
-from .recognizer import Recognizer
+from .recognizer import Decodable
 from . import symbol_tape
 from .lr import LR
-from .transducer import transducer_forward_score
 from .checkpoint import Checkpointer
-from .ctc import ctc_reduce_mean
 
 
 def log(*args, flush=False, **kwargs):
@@ -46,17 +43,11 @@ class System(nn.Module):
         self.args = args
 
         self.encoder = models['encoder']
-        self.recognizer: Recognizer = models['recognizer']
-        self.lm = models['lm'] if 'lm' in models else None
+        self.recognizer: Decodable = models['recognizer']
         self.vocab = symbol_tape.make_vocab(args.vocab)
 
-        if self.lm:
-            self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
-                                                    self.recognizer.parameters(),
-                                                    self.lm.parameters()), lr=args.lr)
-        else:
-            self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
-                                                    self.recognizer.parameters()), lr=args.lr)
+        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
+                                                self.recognizer.parameters()), lr=args.lr)
         self.scaler = torch.cuda.amp.GradScaler()
         self.lr = LR(args)
 
@@ -75,13 +66,10 @@ class System(nn.Module):
         self.encoder.load_state_dict(encoder, strict=False)
         self.recognizer.load_state_dict(checkpoint['recognizer'])
         self.scaler.load_state_dict(checkpoint['scaler'])
-        #self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
         if 'vocab' in checkpoint:
             log('loading vocab state')
             self.vocab.load_state_dict(checkpoint['vocab'])
-        if self.lm is not None:
-            log('loading transducer lm')
-            self.lm.load_state_dict(checkpoint['lm'])
 
     def make_state_dict(self, **extra):
         return {
@@ -90,7 +78,6 @@ class System(nn.Module):
             'scaler': self.scaler.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'vocab': self.vocab.state_dict(),
-            'lm': self.lm.state_dict() if self.lm is not None else None,
             'loop_args': self.args,
         } | extra
 
@@ -112,39 +99,9 @@ class System(nn.Module):
 
         feature_lengths = self.subsampled_lengths(input_lengths)
 
-        features, feature_lengths = self.encode(inputs, input_lengths)
         with torch.autocast(device_type='cuda', dtype=torch.float16):
-            if self.lm is not None:
-                #
-                # Output dependencies are controlled by LM
-                #
-                N, _, _ = inputs.shape
-                hidden = self.lm.init_hidden(N)
-
-                # input needs to start with 0
-                lm_targets = torch.cat([targets.new_zeros((N, 1)), targets], dim=1) # (N, U1)
-
-                lm_outputs, _ = self.lm.forward_batch_first(lm_targets, hidden) # (N, U1, C)
-
-                features = self.recognizer.dropout(features)
-                features = self.recognizer.classifier(features) # (N, T, C)
-
-                joint = features[:, :, None, :] + lm_outputs[:, None, :, :] # (N, T, U1, C)
-                #joint = joint.log_softmax(dim=-1)
-
-                #loss = ctc_reduce_mean(transducer_forward_score(joint, targets, logit_lengths, target_lengths), target_lengths)
-
-                from torchaudio.functional import rnnt_loss
-                loss = rnnt_loss(joint,
-                                 targets.to(torch.int32),
-                                 feature_lengths.to(torch.int32),
-                                 target_lengths.to(torch.int32),
-                                 blank=0, reduction='mean', fused_log_softmax=True)
-            else:
-                #
-                # Pass through to a decoder
-                #
-                loss = self.recognizer(features, targets, feature_lengths, target_lengths, star_penalty=self.args.star_penalty)
+            features, feature_lengths = self.encode(inputs, input_lengths)
+            loss = self.recognizer(features, targets, feature_lengths, target_lengths, star_penalty=self.args.star_penalty)
 
         return loss, features, feature_lengths
 
@@ -173,8 +130,6 @@ class System(nn.Module):
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), self.args.clip_grad_norm)
-            if self.lm:
-                grad_norm = 0.5*(grad_norm + torch.nn.utils.clip_grad_norm_(self.lm.parameters(), self.args.clip_grad_norm))
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
                 log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()

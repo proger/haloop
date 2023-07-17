@@ -1,12 +1,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Protocol
 
 from .ctc import ctc_forward_score3, ctc_reduce_mean
 from .star import star_ctc_forward_score
+from .transducer import transducer_forward_score
+from .rnn import Decoder
 
 
-class Recognizer(nn.Module):
+class Decodable(Protocol):
+    def log_probs(self, features):
+        ...
+
+    def decode(self, features, input_lengths):
+        ...
+
+    def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None):
+        ...
+
+
+class Recognizer(nn.Module, Decodable):
     def __init__(self, feat_dim=1024, vocab_size=256):
         super().__init__()
         self.classifier = nn.Linear(feat_dim, vocab_size)
@@ -51,6 +65,48 @@ class Recognizer(nn.Module):
                                                 star_penalty=self.star_penalty)
                 loss = ctc_reduce_mean(losses, target_lengths)
                 return loss
+
+
+class Transducer(nn.Module, Decodable):
+    def __init__(self, feat_dim=1024, vocab_size=256):
+        super().__init__()
+        self.classifier = nn.Linear(feat_dim, vocab_size)
+        self.lm = Decoder(vocab_size, emb_dim=512, hidden_dim=512, num_layers=2, dropout=0.2)
+        self.dropout = nn.Dropout(0.2)
+
+    def forward(
+        self,
+        features,
+        targets,
+        input_lengths=None,
+        target_lengths=None,
+        star_penalty=None # ignored
+    ):
+        N, _, _ = features.shape
+        hidden = self.lm.init_hidden(N)
+
+        # input needs to start with 0
+        lm_targets = torch.cat([targets.new_zeros((N, 1)), targets], dim=1) # (N, U1)
+
+        lm_outputs, _ = self.lm.forward_batch_first(lm_targets, hidden) # (N, U1, C)
+
+        features = self.dropout(features)
+        features = self.classifier(features) # (N, T, C)
+
+        joint = features[:, :, None, :] + lm_outputs[:, None, :, :] # (N, T, U1, C)
+
+        if False:
+            joint = joint.log_softmax(dim=-1)
+            losses = transducer_forward_score(joint, targets, input_lengths, target_lengths)
+            loss = ctc_reduce_mean(losses, target_lengths)
+        else:
+            from torchaudio.functional import rnnt_loss
+            loss = rnnt_loss(joint,
+                                targets.to(torch.int32),
+                                input_lengths.to(torch.int32),
+                                target_lengths.to(torch.int32),
+                                blank=0, reduction='mean', fused_log_softmax=True)
+        return loss
 
 
 if __name__ == '__main__':

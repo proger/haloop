@@ -13,7 +13,7 @@ from .attention import GPT
 from .attention_audio import AudioEncoder, StridingAudioEncoder
 from .rnn import Encoder, Decoder
 from .resnet import FixupResNet, FixupBasicBlock
-from .recognizer import Recognizer
+from .recognizer import Recognizer, Transducer
 
 
 @dataclass
@@ -99,7 +99,7 @@ def create_model(arch: str, compile: bool = True):
         r9
         audio-encoder
         recognizer:encoder:vocab_size
-        transducer:encoder:decoder:vocab_size
+        rnn-transducer:encoder:vocab_size
     """
     match arch.split(':'):
         case ['decoder']:
@@ -160,12 +160,11 @@ def create_model(arch: str, compile: bool = True):
                 'encoder': create_model(encoder_arch, compile=False),
                 'recognizer': Recognizer(feat_dim=1024, vocab_size=vocab_size),
             })
-        case ['transducer', encoder_arch, decoder_arch, vocab_size]:
+        case ['rnn-transducer', encoder_arch, vocab_size]:
             vocab_size = int(vocab_size)
             model = nn.ModuleDict({
                 'encoder': create_model(encoder_arch, compile=False),
-                'recognizer': Recognizer(feat_dim=1024, vocab_size=vocab_size),
-                'lm': create_model(decoder_arch, compile=False),
+                'recognizer': Transducer(feat_dim=1024, vocab_size=vocab_size),
             })
 
     if compile:
