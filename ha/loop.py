@@ -24,16 +24,16 @@ def log(*args, flush=False, **kwargs):
 
 
 class Collator:
-    def __init__(self, vocabulary):
-        self.vocabulary = vocabulary
+    def __init__(self, vocab):
+        self.vocab = vocab
 
     def __call__(self, batch):
         batch_indices = torch.tensor([b[0] for b in batch])
         input_lengths = torch.tensor([len(b[1]) for b in batch])
         inputs = torch.nn.utils.rnn.pad_sequence([b[1] for b in batch], batch_first=True)
-        targets = [self.vocabulary.encode(b[2]) for b in batch]
+        targets = [self.vocab.encode(b[2]) for b in batch]
         target_lengths = torch.tensor([len(t) for t in targets])
-        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=-100)
+        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
         return batch_indices, inputs, targets, input_lengths, target_lengths
 
 
@@ -100,7 +100,7 @@ class System(nn.Module):
         feature_lengths = self.subsampled_lengths(input_lengths)
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
-            features, feature_lengths = self.encode(inputs, input_lengths)
+            features = self.encoder(inputs, input_lengths)
             loss = self.recognizer(features, targets, feature_lengths, target_lengths, star_penalty=self.args.star_penalty)
 
         return loss, features, feature_lengths
@@ -116,7 +116,7 @@ class System(nn.Module):
         t0 = time.time()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             global_step = i + epoch * len(train_loader)
-            loss = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
                 log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
@@ -161,22 +161,20 @@ class System(nn.Module):
         self.recognizer.eval()
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
             loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
-            hypotheses, alignments = self.recognizer.decode(
-                features, targets, feature_lengths, target_lengths
-            )
+            hypotheses, alignments = self.recognizer.decode(features, feature_lengths, target_lengths)
 
             valid_loss += loss.item()
 
-            for dataset_index, ref, ref_len, hyp_, ali_ in zip(
-                dataset_indices, targets, target_lengths, hypotheses, alignments
+            for dataset_index, ref, ref_len, hyp_, ali_, feat_len in zip(
+                dataset_indices, targets, target_lengths, hypotheses, alignments, feature_lengths
             ):
                 stat = {}
                 hyp = hyp_.cpu().tolist()
-                ali = ali_.cpu().tolist()
+                ali = ali_[:feat_len].cpu().tolist() if ali_ is not None else []
                 ref = ref[:ref_len].cpu().tolist()
 
-                hyp1 = self.vocabulary.decode(hyp)
-                ref1 = self.vocabulary.decode(ref)
+                hyp1 = self.vocab.decode(hyp)
+                ref1 = self.vocab.decode(ref)
 
                 stat |= edit_distance(hyp1, ref1)
                 stat['length'] = len(ref1)
@@ -194,7 +192,7 @@ class System(nn.Module):
                 if self.args.quiet:
                     continue
 
-                ali = self.vocabulary.decode(ali)
+                ali = self.vocab.decode(ali)
 
                 if isinstance(ref1, list):
                     star = '␣'
@@ -212,7 +210,8 @@ class System(nn.Module):
                 dataset_index = dataset_index.item()
                 print(epoch, dataset_index, 'hyp', self.vocab.format(hyp), sep="\t", flush=True)
                 print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
-                print(epoch, dataset_index, 'ali', self.vocab.format(ali), sep="\t", flush=True)
+                if ali:
+                    print(epoch, dataset_index, 'ali', self.vocab.format(ali), sep="\t", flush=True)
                 print(epoch, dataset_index, 'stat', stat, sep="\t", flush=True)
 
         count = i + 1

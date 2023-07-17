@@ -13,7 +13,7 @@ class Decodable(Protocol):
     def log_probs(self, features):
         ...
 
-    def decode(self, features, input_lengths):
+    def decode(self, features, input_lengths, target_lengths):
         ...
 
     def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None):
@@ -31,7 +31,7 @@ class Recognizer(nn.Module, Decodable):
         features = self.classifier(features)
         return features.log_softmax(dim=-1)
 
-    def decode(self, features, input_lengths):
+    def decode(self, features, input_lengths, target_lengths):
         logits = self.log_probs(features)
 
         alignments = logits.argmax(dim=-1)
@@ -41,7 +41,7 @@ class Recognizer(nn.Module, Decodable):
         ])
 
         #decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq) # FIXME: speed it up
-        return hypotheses, alignments, input_lengths
+        return hypotheses, alignments
 
     def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None):
         if input_lengths is None:
@@ -73,6 +73,9 @@ class Transducer(nn.Module, Decodable):
         self.classifier = nn.Linear(feat_dim, vocab_size)
         self.lm = Decoder(vocab_size, emb_dim=512, hidden_dim=512, num_layers=2, dropout=0.2)
         self.dropout = nn.Dropout(0.2)
+
+    def decode(self, features, input_lengths):
+        raise NotImplementedError()
 
     def forward(
         self,
