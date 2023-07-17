@@ -101,26 +101,24 @@ class System(nn.Module):
             return input_lengths
 
     def forward(self, inputs, targets, input_lengths, target_lengths):
-        args = self.args
-        device = args.device
+        device = next(self.encoder.parameters()).device
 
-        N, _, _ = inputs.shape
         inputs = inputs.to(device) # (N, T, C)
-        targets = targets.to(device) # (N, U)
         input_lengths = input_lengths.to(device) # (N,)
+        targets = targets.to(device) # (N, U)
         target_lengths = target_lengths.to(device) # (N,)
 
         #log(inputs, targets) # works best with --batch-size 1
 
-        logit_lengths = self.subsampled_lengths(input_lengths)
+        feature_lengths = self.subsampled_lengths(input_lengths)
 
+        features, feature_lengths = self.encode(inputs, input_lengths)
         with torch.autocast(device_type='cuda', dtype=torch.float16):
-            outputs = self.encoder(inputs) # (N1, T, C)
-
             if self.lm is not None:
                 #
                 # Output dependencies are controlled by LM
                 #
+                N, _, _ = inputs.shape
                 hidden = self.lm.init_hidden(N)
 
                 # input needs to start with 0
@@ -128,10 +126,10 @@ class System(nn.Module):
 
                 lm_outputs, _ = self.lm.forward_batch_first(lm_targets, hidden) # (N, U1, C)
 
-                outputs = self.recognizer.dropout(outputs)
-                outputs = self.recognizer.classifier(outputs) # (N, T, C)
+                features = self.recognizer.dropout(features)
+                features = self.recognizer.classifier(features) # (N, T, C)
 
-                joint = outputs[:, :, None, :] + lm_outputs[:, None, :, :] # (N, T, U1, C)
+                joint = features[:, :, None, :] + lm_outputs[:, None, :, :] # (N, T, U1, C)
                 #joint = joint.log_softmax(dim=-1)
 
                 #loss = ctc_reduce_mean(transducer_forward_score(joint, targets, logit_lengths, target_lengths), target_lengths)
@@ -139,17 +137,16 @@ class System(nn.Module):
                 from torchaudio.functional import rnnt_loss
                 loss = rnnt_loss(joint,
                                  targets.to(torch.int32),
-                                 logit_lengths.to(torch.int32),
+                                 feature_lengths.to(torch.int32),
                                  target_lengths.to(torch.int32),
                                  blank=0, reduction='mean', fused_log_softmax=True)
-                logits = joint # FIXME:
             else:
                 #
-                # All outputs are independent
+                # Pass through to a decoder
                 #
-                loss, logits = self.recognizer(outputs, targets, logit_lengths, target_lengths, star_penalty=args.star_penalty)
+                loss = self.recognizer(features, targets, feature_lengths, target_lengths, star_penalty=self.args.star_penalty)
 
-        return loss, outputs, logits, logit_lengths
+        return loss, features, feature_lengths
 
     def train_one_epoch(self, epoch, train_loader):
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
@@ -162,7 +159,7 @@ class System(nn.Module):
         t0 = time.time()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             global_step = i + epoch * len(train_loader)
-            loss, _, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
                 log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
@@ -201,33 +198,30 @@ class System(nn.Module):
 
     @torch.inference_mode()
     def evaluate(self, epoch, valid_loader):
-        encoder, recognizer, vocabulary = self.encoder, self.recognizer, self.vocab
-
         valid_loss = 0.
         label_errors = Counter()
         word_errors = Counter()
 
-        encoder.eval()
-        recognizer.eval()
+        self.encoder.eval()
+        self.recognizer.eval()
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
-            loss, outputs, logits, logit_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
+            hypotheses, alignments = self.recognizer.decode(
+                features, targets, feature_lengths, target_lengths
+            )
 
             valid_loss += loss.item()
 
-            for dataset_index, ref, ref_len, seq, seq_len in zip(dataset_indices, targets, target_lengths, logits, logit_lengths):
-                stat = {'logits': seq_len.item()}
-
-                seq = seq[:seq_len].cpu()
+            for dataset_index, ref, ref_len, hyp_, ali_ in zip(
+                dataset_indices, targets, target_lengths, hypotheses, alignments
+            ):
+                stat = {}
+                hyp = hyp_.cpu().tolist()
+                ali = ali_.cpu().tolist()
                 ref = ref[:ref_len].cpu().tolist()
-                ali = seq.argmax(dim=-1)
 
-                greedy = [i for i in torch.unique_consecutive(ali, dim=-1).tolist() if i]
-                hyp1 = vocabulary.decode(greedy)
-
-                #decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq) # FIXME: too slow
-                #hyp1 = vocabulary.decode(filter(None, decoded_seqs[0]))
-
-                ref1 = vocabulary.decode(ref)
+                hyp1 = self.vocabulary.decode(hyp)
+                ref1 = self.vocabulary.decode(ref)
 
                 stat |= edit_distance(hyp1, ref1)
                 stat['length'] = len(ref1)
@@ -245,7 +239,7 @@ class System(nn.Module):
                 if self.args.quiet:
                     continue
 
-                ali = vocabulary.decode(ali.tolist())
+                ali = self.vocabulary.decode(ali)
 
                 if isinstance(ref1, list):
                     star = '␣'
