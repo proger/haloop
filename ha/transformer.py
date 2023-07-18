@@ -74,18 +74,21 @@ class Decoder(nn.Module, Decodable):
         return loss, stats
 
     def decode(self, features, input_lengths, target_lengths):
+        "Perform batched greedy decoding."
+
         N, S, _C = features.shape
 
         # make an inference prompt:
         # add <s> token to the beginning of each target sequence
-        stx = 2 # <s>/BOS/␂ token
-        prompt = input_lengths.new_zeros((N, T := 1)) + stx
+        stx, etx = 2, 3 # <s>/BOS/␂ token
+        prompt = input_lengths.new_zeros((N, 1)) + stx
+        output_lengths = input_lengths.new_zeros((N,))
 
         # add positional encoding to features
         features = features + sinusoids_like(features)
 
         x = features.new_zeros((N, 0, self.wte.embedding_dim))
-        for t in range(target_lengths.max().item()):
+        for t in range(target_lengths.max().item()+1):
             # run one token at a time
             x_ = self.wte(prompt[:, [t]]) + self.wpe(torch.arange(t, t+1, device=prompt.device))
             # TODO: use kv caching
