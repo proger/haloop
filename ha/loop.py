@@ -101,7 +101,13 @@ class System(nn.Module):
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             features = self.encoder(inputs, input_lengths)
-            loss = self.recognizer(features, targets, feature_lengths, target_lengths, star_penalty=self.args.star_penalty)
+            loss, stats = self.recognizer(
+                features, targets, feature_lengths, target_lengths,
+                star_penalty=self.args.star_penalty,
+                measure_entropy=self.args.entropy and not self.training,
+            )
+            for k in stats:
+                print(k, torch.stack(stats[k]))
 
         return loss, features, feature_lengths
 
@@ -254,6 +260,7 @@ def make_parser():
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--accumulate', type=int, default=1, help="Gradient accumulation steps")
+    parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
 
     LR.add_arguments(parser)
 

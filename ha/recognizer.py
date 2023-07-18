@@ -64,7 +64,7 @@ class Recognizer(nn.Module, Decodable):
                 losses = star_ctc_forward_score(logits, targets, input_lengths, target_lengths,
                                                 star_penalty=self.star_penalty)
                 loss = ctc_reduce_mean(losses, target_lengths)
-                return loss
+                return loss, {}
 
 
 class Transducer(nn.Module, Decodable):
@@ -109,7 +109,7 @@ class Transducer(nn.Module, Decodable):
                                 input_lengths.to(torch.int32),
                                 target_lengths.to(torch.int32),
                                 blank=0, reduction='mean', fused_log_softmax=True)
-        return loss
+        return loss, {}
 
 
 if __name__ == '__main__':

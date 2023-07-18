@@ -23,7 +23,8 @@ class Decoder(nn.Module, Decodable):
     def forward(
         self,
         features, targets, input_lengths=None, target_lengths=None,
-        star_penalty=None # ignored
+        star_penalty=None, # ignored
+        measure_entropy=False,
     ):
         N, T = targets.shape
 
@@ -42,15 +43,24 @@ class Decoder(nn.Module, Decodable):
         targets[:, target_lengths] = etx
         T = T + 1
 
+        stats = {'meme_entropy': [], 'self_entropy': []}
+
+        # run all tokens at once
         y = self.wte(prompt) + self.wpe(torch.arange(T, device=prompt.device))
         causal_mask = torch.triu(y.new_ones(T, T), diagonal=1).bool()
         for block in self.h:
-            y = block(y, time_mask=causal_mask, memory=features, memory_lengths=input_lengths)
+            y, (m_ent, t_ent) = block(
+                y,
+                time_mask=causal_mask, memory=features, memory_lengths=input_lengths,
+                measure_entropy=measure_entropy
+            )
+            stats['meme_entropy'].append(m_ent)
+            stats['self_entropy'].append(t_ent)
 
         logits = self.lm_head(self.ln_f(y)) # (N, T, V)
 
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0)
-        return loss
+        return loss, stats
 
     def decode(self, features, input_lengths, target_lengths):
         N, S, _C = features.shape
@@ -66,7 +76,7 @@ class Decoder(nn.Module, Decodable):
             y = torch.cat([y, y_], dim=1) # (N, T, C)
             causal_mask = torch.triu(y.new_ones(T, T), diagonal=1).bool()
             for block in self.h:
-                y = block(y, time_mask=causal_mask, memory=features, memory_lengths=input_lengths)
+                y, _ = block(y, time_mask=causal_mask, memory=features, memory_lengths=input_lengths)
             logits = self.lm_head(self.ln_f(y[:, [-1], :])) # (N, 1, V)
 
             token = logits.argmax(dim=-1) # (N, 1)
@@ -89,9 +99,10 @@ class MultiHeadAttention(nn.Module):
         self.v = nn.Linear(head_dim * heads, head_dim * heads, bias=False)
         
         self.proj = nn.Linear(head_dim * heads, head_dim * heads, bias=False)
+        self.p_drop = p_drop
         self.dropout = nn.Dropout(p_drop)
 
-    def forward(self, x, memory, mask=None):
+    def forward(self, x, memory, mask=None, measure_entropy=False):
         N, T, _C = x.shape
         N, S, _C = memory.shape
         heads, head_dim = self.heads, self.head_dim
@@ -104,14 +115,25 @@ class MultiHeadAttention(nn.Module):
         k = k.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
         v = v.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
 
-        qk = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.shape[-1]) # (N, heads, T, S)
-        if mask is not None:
-            # use ~mask in flash attention
-            qk = qk.masked_fill(mask, float('-inf'))
-        x = qk.softmax(dim=-1) @ v # (N, heads, T, head_dim)
+        if not measure_entropy:
+            x = F.scaled_dot_product_attention(q, k, v, attn_mask=~mask, dropout_p=self.p_drop if self.training else 0)
+
+            att_entropy = torch.tensor(float('-inf'))
+        else:
+            qk = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.shape[-1]) # (N, heads, T, S)
+            if mask is not None:
+                # use ~mask with flash attention
+                qk = qk.masked_fill(mask, float('-inf'))
+
+            att = qk.softmax(dim=-1)
+
+            # measure attention entropy
+            att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
+
+            x = att @ v # (N, heads, T, head_dim)
         x = x.transpose(1, 2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
-        return self.dropout(self.proj(x))
+        return self.dropout(self.proj(x)), att_entropy
 
 
 class Block(nn.Module):
@@ -132,11 +154,17 @@ class Block(nn.Module):
             nn.Dropout(p_drop),
         )
 
-    def forward(self, x, time_mask=None, memory=None, memory_lengths=None):
+    def forward(self, x, time_mask=None, memory=None, memory_lengths=None, measure_entropy=False):
         x = self.ln_time(x)
+
         if self.mix_memory is not None:
             memory_mask = torch.arange(memory.shape[-2], device=x.device)[None, :] >= memory_lengths[:, None]
-            x = x + self.mix_memory(x, memory, mask=memory_mask[:, None, None, :])
-        x = x + self.mix_time(x, x, mask=time_mask)
+            m, m_ent = self.mix_memory(x, memory, mask=memory_mask[:, None, None, :], measure_entropy=measure_entropy)
+            x = x + m
+        else:
+            m_ent = float('-inf')
+
+        t, t_ent = self.mix_time(x, x, mask=time_mask, measure_entropy=measure_entropy)
+        x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
-        return x
+        return x, (m_ent, t_ent)
