@@ -35,12 +35,12 @@ class Decoder(nn.Module, Decodable):
 
         # prompt1: STX a b c
         # prompt2: STX a b c d
-        # target1: a b c PAD
-        # target2: a b c d
+        # target1: a b c ETX PAD
+        # target2: a b c d ETX
         stx, etx = 2, 3
         prompt = F.pad(targets, (1, 0), value=stx) # (N, T+1)
         targets = F.pad(targets, (0, 1), value=0) # (N, T+1)
-        targets[:, target_lengths] = etx
+        targets[torch.arange(N), target_lengths] = etx
         T = T + 1
 
         stats = {'meme_entropy': [], 'self_entropy': []}
@@ -64,6 +64,9 @@ class Decoder(nn.Module, Decodable):
 
     def decode(self, features, input_lengths, target_lengths):
         N, S, _C = features.shape
+
+        # make an inference prompt:
+        # add <s> token to the beginning of each target sequence
         stx = 2 # <s>/BOS/␂ token
         prompt = input_lengths.new_zeros((N, T := 1)) + stx
 
@@ -72,14 +75,19 @@ class Decoder(nn.Module, Decodable):
             # run one token at a time
             y_ = self.wte(prompt[:, [-1]]) + self.wpe(torch.arange(T-1, T, device=prompt.device))
 
+        x = features.new_zeros((N, 0, self.wte.embedding_dim))
+        for t in range(target_lengths.max().item()):
+            # run one token at a time
+            x_ = self.wte(prompt[:, [t]]) + self.wpe(torch.arange(t, t+1, device=prompt.device))
             # TODO: use kv caching
-            y = torch.cat([y, y_], dim=1) # (N, T, C)
-            causal_mask = torch.triu(y.new_ones(T, T), diagonal=1).bool()
+            y = x = torch.cat([x, x_], dim=1) # (N, T, C)
+
+            causal_mask = torch.triu(x.new_ones(t+1, t+1), diagonal=1).bool()
             for block in self.h:
                 y, _ = block(y, time_mask=causal_mask, memory=features, memory_lengths=input_lengths)
-            logits = self.lm_head(self.ln_f(y[:, [-1], :])) # (N, 1, V)
+            logits = self.lm_head(self.ln_f(y[:, t, :])) # (N, 1, V)
 
-            token = logits.argmax(dim=-1) # (N, 1)
+            token = logits.argmax(dim=-1, keepdim=True) # (N, 1)
             prompt = torch.cat([prompt, token], dim=-1) # (N, T+1)
             T += 1
 
