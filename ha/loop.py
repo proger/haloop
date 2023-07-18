@@ -105,17 +105,19 @@ class System(nn.Module):
 
         return loss, features, feature_lengths
 
-    def train_one_epoch(self, epoch, train_loader):
+    def train_one_epoch(self, epoch, global_step, train_loader):
         encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
 
         optimizer.zero_grad()
+        self.train()
         encoder.train()
         recognizer.train()
 
         train_loss = 0.
         t0 = time.time()
-        for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
-            global_step = i + epoch * len(train_loader)
+        local_step, accumulate = 0, 0
+
+        for _batch_indices, inputs, targets, input_lengths, target_lengths in train_loader:
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
@@ -128,6 +130,11 @@ class System(nn.Module):
                 continue
 
             scaler.scale(loss).backward()
+            accumulate += 1
+
+            if accumulate % self.args.accumulate:
+                continue
+
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), self.args.clip_grad_norm)
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
@@ -137,13 +144,14 @@ class System(nn.Module):
                 continue
 
             lr = self.lr.apply_lr_(optimizer, global_step)
+            global_step, local_step = global_step + 1, local_step + 1
 
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
 
             train_loss += loss.item()
-            if i and i % self.args.log_interval == 0:
+            if local_step and local_step % self.args.log_interval == 0:
                 train_loss = train_loss / self.args.log_interval
                 t1 = time.time()
                 log(f'[{epoch}, {global_step:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f} lr: {lr:.5f}', flush=True)
@@ -151,12 +159,15 @@ class System(nn.Module):
                 t0 = t1
                 train_loss = 0.
 
+        return global_step
+
     @torch.inference_mode()
     def evaluate(self, epoch, valid_loader):
         valid_loss = 0.
         label_errors = Counter()
         word_errors = Counter()
 
+        self.eval()
         self.encoder.eval()
         self.recognizer.eval()
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
@@ -242,6 +253,7 @@ def make_parser():
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
+    parser.add_argument('--accumulate', type=int, default=1, help="Gradient accumulation steps")
 
     LR.add_arguments(parser)
 
@@ -267,17 +279,18 @@ def main():
     valid_loader = torch.utils.data.DataLoader(
         concat_datasets(args.eval),
         collate_fn=Collator(system.vocab),
-        batch_size=16,
+        batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
     )
 
-    epoch = 0
+    epoch, global_step = 0, 0
     if args.init:
         checkpoint = torch.load(args.init, map_location=args.device)
         system.load_state_dict(checkpoint)
         if not args.reset:
             epoch = checkpoint.get('epoch', -1) + 1
+            global_step = checkpoint.get('global_step', -1) + 1
     else:
         log('initializing randomly')
 
@@ -298,17 +311,18 @@ def main():
             drop_last=True
         )
 
-        log('total training iterations:', len(train_loader) * args.num_epochs)
+        log('total training minibatches:', len(train_loader) * args.num_epochs)
 
         checkpoint = Checkpointer(path=args.save, save_all=args.always_save_checkpoint)
 
         for epoch in range(epoch, args.num_epochs):
-            system.train_one_epoch(epoch, train_loader)
+            global_step = system.train_one_epoch(epoch, global_step, train_loader)
 
             valid_loss = system.evaluate(epoch, valid_loader)
             checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict(**{
                 'best_valid_loss': valid_loss,
                 'epoch': epoch,
+                'global_step': global_step,
             }))
     else:
         system.evaluate(epoch, valid_loader)
