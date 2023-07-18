@@ -98,16 +98,18 @@ class System(nn.Module):
         #log(inputs, targets) # works best with --batch-size 1
 
         feature_lengths = self.subsampled_lengths(input_lengths)
+        measure_entropy = self.args.entropy and not self.training
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             features = self.encoder(inputs, input_lengths)
             loss, stats = self.recognizer(
                 features, targets, feature_lengths, target_lengths,
                 star_penalty=self.args.star_penalty,
-                measure_entropy=self.args.entropy and not self.training,
+                measure_entropy=measure_entropy,
             )
-            for k in stats:
-                print(k, torch.stack(stats[k]))
+            if measure_entropy:
+                for k in stats:
+                    print(k, torch.stack(stats[k]))
 
         return loss, features, feature_lengths
 
