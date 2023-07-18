@@ -5,6 +5,14 @@ import math
 
 from .recognizer import Decodable
 
+def sinusoids_like(x, base=10000):
+    _, T, C = x.shape
+    t = torch.arange(0, T, dtype=x.dtype, device=x.device)[:, None]
+    exp = -torch.arange(0, C, 2, dtype=x.dtype, device=x.device) / C
+    even = torch.sin((base**exp) * t)
+    odd = torch.cos((base**exp) * t)
+    return torch.stack([even, odd], dim=-1).flatten(-2, -1)
+
 
 class Decoder(nn.Module, Decodable):
     def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
@@ -43,6 +51,9 @@ class Decoder(nn.Module, Decodable):
         targets[torch.arange(N), target_lengths] = etx
         T = T + 1
 
+        # add positional encoding to features
+        features = features + sinusoids_like(features)
+
         stats = {'meme_entropy': [], 'self_entropy': []}
 
         # run all tokens at once
@@ -70,10 +81,8 @@ class Decoder(nn.Module, Decodable):
         stx = 2 # <s>/BOS/␂ token
         prompt = input_lengths.new_zeros((N, T := 1)) + stx
 
-        y = features.new_zeros((N, 0, self.wte.embedding_dim))
-        for _ in range(target_lengths.max().item()):
-            # run one token at a time
-            y_ = self.wte(prompt[:, [-1]]) + self.wpe(torch.arange(T-1, T, device=prompt.device))
+        # add positional encoding to features
+        features = features + sinusoids_like(features)
 
         x = features.new_zeros((N, 0, self.wte.embedding_dim))
         for t in range(target_lengths.max().item()):
