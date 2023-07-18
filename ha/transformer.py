@@ -96,13 +96,16 @@ class Decoder(nn.Module, Decodable):
                 y, _ = block(y, time_mask=causal_mask, memory=features, memory_lengths=input_lengths)
             logits = self.lm_head(self.ln_f(y[:, t, :])) # (N, 1, V)
 
-            token = logits.argmax(dim=-1, keepdim=True) # (N, 1)
-            prompt = torch.cat([prompt, token], dim=-1) # (N, T+1)
-            T += 1
+            # ignore output on completed sequences
+            completed = prompt[:, t] == etx
+            output_lengths = torch.where(completed, output_lengths, output_lengths+1)
+            token = torch.where(completed, etx, logits.argmax(dim=-1))
 
-        prompt = prompt[:, 1:] # (N, T)
+            prompt = torch.cat([prompt, token[:, None]], dim=-1) # (N, T+1)
+
+        outputs = torch.nested.nested_tensor([p[1:l] for p, l in zip(prompt, output_lengths)])
         alignments = [None]*N
-        return prompt, alignments
+        return outputs, alignments
         
 
 
