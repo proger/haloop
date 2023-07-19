@@ -231,7 +231,7 @@ class System(nn.Module):
                 print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
                 if ali:
                     print(epoch, dataset_index, 'ali', self.vocab.format(ali), sep="\t", flush=True)
-                print(epoch, dataset_index, 'stat', stat, sep="\t", flush=True)
+                print(epoch, dataset_index, 'stat', ' '.join(f'{k}={stat[k]}' for k in stat), sep="\t", flush=True)
 
         count = i + 1
         ler = round(label_errors['total'] / label_errors['length'], 3)
