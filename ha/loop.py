@@ -46,8 +46,7 @@ class System(nn.Module):
         self.recognizer: Decodable = models['recognizer']
         self.vocab = symbol_tape.make_vocab(args.vocab)
 
-        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(),
-                                                self.recognizer.parameters()), lr=args.lr)
+        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()))
         self.scaler = torch.cuda.amp.GradScaler()
         self.lr = LR(args)
 
@@ -114,18 +113,18 @@ class System(nn.Module):
         return loss, features, feature_lengths
 
     def train_one_epoch(self, epoch, global_step, train_loader):
-        encoder, recognizer, optimizer, scaler = self.encoder, self.recognizer, self.optimizer, self.scaler
+        optimizer, scaler = self.optimizer, self.scaler
 
         optimizer.zero_grad()
-        self.train()
-        encoder.train()
-        recognizer.train()
 
         train_loss = 0.
         t0 = time.time()
         local_step, accumulate = 0, 0
 
-        for _batch_indices, inputs, targets, input_lengths, target_lengths in train_loader:
+        self.train()
+        self.encoder.train()
+        self.recognizer.train()
+        for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
@@ -137,6 +136,7 @@ class System(nn.Module):
                 log(f'[{epoch}, {global_step:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
                 continue
 
+            loss = loss / self.args.accumulate
             scaler.scale(loss).backward()
             accumulate += 1
 
@@ -144,7 +144,7 @@ class System(nn.Module):
                 continue
 
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(chain(encoder.parameters(), recognizer.parameters()), self.args.clip_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(chain(self.encoder.parameters(), self.recognizer.parameters()), self.args.clip_grad_norm)
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
                 log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch', flush=True)
                 scaler.update()
@@ -158,14 +158,15 @@ class System(nn.Module):
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
 
-            train_loss += loss.item()
-            if local_step and local_step % self.args.log_interval == 0:
-                train_loss = train_loss / self.args.log_interval
-                t1 = time.time()
-                log(f'[{epoch}, {global_step:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f} lr: {lr:.5f}', flush=True)
-                wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm, 'train/lr': lr, 'iter': global_step})
-                t0 = t1
-                train_loss = 0.
+            train_loss += loss.item() / self.args.log_interval
+            if local_step % self.args.log_interval:
+                continue
+
+            t1 = time.time()
+            log(f'[{epoch}, {global_step:5d}] time: {t1-t0:.3f} loss: {train_loss:.3f} grad_norm: {grad_norm:.3f} lr: {lr:.5f}', flush=True)
+            wandb.log({'train/loss': train_loss, 'train/grad_norm': grad_norm, 'train/lr': lr, 'iter': global_step})
+            t0 = t1
+            train_loss = 0.
 
         return global_step
 
@@ -329,7 +330,6 @@ def main():
 
         for epoch in range(epoch, args.num_epochs):
             global_step = system.train_one_epoch(epoch, global_step, train_loader)
-
             valid_loss = system.evaluate(epoch, valid_loader)
             checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict(**{
                 'best_valid_loss': valid_loss,
