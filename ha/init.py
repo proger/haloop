@@ -13,7 +13,7 @@ from .attention import GPT
 from .attention_audio import AudioEncoder, StridingAudioEncoder
 from .rnn import Encoder, Decoder
 from .resnet import FixupResNet, FixupBasicBlock
-from .recognizer import Recognizer, Transducer
+from .recognizer import TemporalClassifier, Transducer
 
 
 @dataclass
@@ -125,41 +125,41 @@ def create_model(arch: str, compile: bool = True):
             encoder = AudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,
-                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+                'recognizer': TemporalClassifier(feat_dim=config.n_embd, vocab_size=config.vocab_size),
             })
         case ['audio-encoder-rotary']:
             config = AudioEncoderConfig()
             encoder = AudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,
-                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+                'recognizer': TemporalClassifier(feat_dim=config.n_embd, vocab_size=config.vocab_size),
             })
         case ['audio-encoder-rotary-dropout']:
             config = AudioEncoderConfig(dropout=0.1)
             encoder = AudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,
-                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+                'recognizer': TemporalClassifier(feat_dim=config.n_embd, vocab_size=config.vocab_size),
             })
         case ['audio-encoder-rotary-dropout-e8']:
             config = AudioEncoderConfig(dropout=0.1, n_layer=8)
             encoder = AudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,
-                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+                'recognizer': TemporalClassifier(feat_dim=config.n_embd, vocab_size=config.vocab_size),
             })
         case ['striding-e8']:
             config = StridingAudioEncoderConfig(dropout=0.1, n_layer=8)
             encoder = StridingAudioEncoder(config)
             model = nn.ModuleDict({
                 'encoder': encoder,
-                'recognizer': Recognizer(feat_dim=config.n_embd, vocab_size=config.vocab_size),
+                'recognizer': TemporalClassifier(feat_dim=config.n_embd, vocab_size=config.vocab_size),
             })
         case ['recognizer', encoder_arch, vocab_size]:
             vocab_size = int(vocab_size)
             model = nn.ModuleDict({
                 'encoder': create_model(encoder_arch, compile=False),
-                'recognizer': Recognizer(feat_dim=1024, vocab_size=vocab_size),
+                'recognizer': TemporalClassifier(feat_dim=1024, vocab_size=vocab_size),
             })
         case ['rnn-transducer', encoder_arch, vocab_size]:
             vocab_size = int(vocab_size)

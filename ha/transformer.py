@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from .recognizer import Decodable, Recognizer
+from .recognizer import Decodable, TemporalClassifier
 
 def sinusoids_like(x, base=10000):
     _, T, C = x.shape
@@ -19,7 +19,7 @@ class CTCAttentionDecoder(nn.Module, Decodable):
     def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
         super().__init__()
         self.decoder = Decoder(context=context, vocab=vocab, head_dim=head_dim, heads=heads, p_drop=p_drop, layers=layers)
-        self.recognizer = Recognizer(feat_dim=head_dim * heads, vocab_size=vocab)
+        self.recognizer = TemporalClassifier(feat_dim=head_dim * heads, vocab_size=vocab)
 
     def forward(
         self,

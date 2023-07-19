@@ -20,7 +20,7 @@ class Decodable(Protocol):
         ...
 
 
-class Recognizer(nn.Module, Decodable):
+class TemporalClassifier(nn.Module, Decodable):
     def __init__(self, feat_dim=1024, vocab_size=256):
         super().__init__()
         self.classifier = nn.Linear(feat_dim, vocab_size)
@@ -116,7 +116,7 @@ if __name__ == '__main__':
     from .xen import Vocabulary
     from .rnn import Encoder
     encoder = Encoder()
-    reco = Recognizer()
+    reco = TemporalClassifier()
     vocabulary = Vocabulary()
     x = torch.randn(1, 13, 320).mT
     x = encoder(x)
