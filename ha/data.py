@@ -2,24 +2,6 @@ from pathlib import Path
 
 import torch
 import torchaudio
-from kaldialign import align
-
-
-def make_frames(wav, op='fbank'):
-    if op == 'mfcc':
-        frames = torchaudio.compliance.kaldi.mfcc(wav)
-
-        # utterance-level CMVN
-        frames -= frames.mean(dim=0)
-        frames /= frames.std(dim=0)
-    elif op == 'fbank':
-        frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
-        #frames += 8.
-        #frames /= 4.
-    else:
-        assert False
-
-    return frames # (T, F)
 
 
 class LabelFile(torch.utils.data.Dataset):
@@ -38,24 +20,7 @@ class LabelFile(torch.utils.data.Dataset):
     def __getitem__(self, index):
         wav, sr = torchaudio.load(self.filenames[index])
         assert sr == 16000
-        return index, make_frames(wav), self.ark[self.filenames[index]]
-
-
-class Directory(torch.utils.data.Dataset):
-    def __init__(self, path: Path):
-        super().__init__()
-        self.files = list(path.glob("*.wav"))
-
-    def __len__(self):
-        return len(self.files)
-
-    def utt_id(self, index):
-        return self.files[index].stem
-
-    def __getitem__(self, index):
-        wav, sr = torchaudio.load(self.files[index])
-        assert sr == 16000
-        return index, make_frames(wav), "the quick brown fox jumps over the lazy dog"
+        return index, wav, self.ark[self.filenames[index]]
 
 
 class LibriSpeech(torch.utils.data.Dataset):
@@ -73,7 +38,7 @@ class LibriSpeech(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         wav, sr, text, speaker_id, chapter_id, utterance_id = self.librispeech[index]
-        return index, make_frames(wav), text
+        return index, wav, text
 
 
 class Mask(torch.utils.data.Dataset):
@@ -109,6 +74,61 @@ class Mask(torch.utils.data.Dataset):
         return index, frames[0, 0, :], text
 
 
+class Speed(torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        super().__init__()
+        self.dataset = dataset
+        self.transform = torchaudio.transforms.SpeedPerturbation(16000, [0.95, 0.98, 1.0, 1.02, 1.05])
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def utt_id(self, index):
+        return self.dataset.utt_id(index)
+
+    def __getitem__(self, index):
+        index, wav, text = self.dataset[index]
+        return index, self.transform(wav)[0], text
+
+
+class Fbank(torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        super().__init__()
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def utt_id(self, index):
+        return self.dataset.utt_id(index)
+
+    def __getitem__(self, index):
+        index, wav, text = self.dataset[index]
+        frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
+        return index, frames, text
+
+
+class MFCC(torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        super().__init__()
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def utt_id(self, index):
+        return self.dataset.utt_id(index)
+
+    def __getitem__(self, index):
+        index, wav, text = self.dataset[index]
+        frames = torchaudio.compliance.kaldi.mfcc(wav)
+
+        # utterance-level CMVN
+        frames -= frames.mean(dim=0)
+        frames /= frames.std(dim=0)
+        return index, frames, text
+
+
 class WordDrop(torch.utils.data.Dataset):
     def __init__(self, dataset, p_drop_words=0.4):
         super().__init__()
@@ -128,6 +148,7 @@ class WordDrop(torch.utils.data.Dataset):
         if not text:
             text = original_text
         if False:
+            from kaldialign import align
             hyp, _ref = list(zip(*align(text.split(), original_text.split(), '*')))
             print(index, ' '.join(h.replace(' ', '_') for h in hyp))
         return index, frames, text
@@ -137,16 +158,22 @@ def make_dataset(s):
     match s.split(':', maxsplit=1):
         case [subset]:
             return LibriSpeech(subset)
-        case ['labels', label_file]:
+        case ['labels', label_file]: # over filename
             return LabelFile(Path(label_file))
-        case ['head', subset]:
+        case ['head', subset]: # any
             return torch.utils.data.Subset(make_dataset(subset), range(16))
-        case ['wdrop.4', subset]:
+        case ['wdrop.4', subset]: # any
             return WordDrop(make_dataset(subset), p_drop_words=0.4)
-        case ['wdrop.1', subset]:
+        case ['wdrop.1', subset]: # any
             return WordDrop(make_dataset(subset), p_drop_words=0.1)
-        case ['mask', subset]:
+        case ['mask', subset]: # over spectrograms
             return Mask(make_dataset(subset))
+        case ['speed', subset]: # only applies over waveforms
+            return Speed(make_dataset(subset))
+        case ['mfcc', subset]: # applies over waveforms
+            return MFCC(make_dataset(subset))
+        case ['fbank', subset]: # applies over waveforms
+            return Fbank(make_dataset(subset))
 
 
 def concat_datasets(s):
@@ -155,7 +182,7 @@ def concat_datasets(s):
     parts = s.split(',')
     paths = [Path(part) for part in parts]
     return torch.utils.data.ConcatDataset(
-        Directory(path) if path.exists() else make_dataset(str(part))
+        make_dataset(str(part))
         for path, part in zip(paths, parts)
     )
 
