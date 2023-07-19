@@ -256,8 +256,8 @@ def make_parser():
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
 
-    parser.add_argument('--save', type=Path, default='ckpt.pt', help="Path to save checkpoint to")
-    parser.add_argument('--always-save-checkpoint', action='store_true', help='If True, always save a checkpoint after each evaluation')
+    parser.add_argument('--exp', type=Path, default='exp/haloop', help="Path to checkpoint directory")
+    parser.add_argument('--save-all', action='store_true', help='Always save a checkpoint after each evaluation')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
@@ -274,7 +274,7 @@ def make_parser():
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
-    parser.add_argument('--wandb', action='store_true', help="Always log to wandb")
+    parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     return parser
 
@@ -312,7 +312,7 @@ def main():
     log('model parameters', sum(p.numel() for p in system.parameters() if p.requires_grad))
 
     if args.train or args.wandb:
-        wandb.init(project='ha', config=args)
+        wandb.init(project='ha', config=args, name=str(args.exp))
 
     if args.train:
         train_loader = torch.utils.data.DataLoader(
@@ -326,7 +326,7 @@ def main():
 
         log('total training minibatches:', len(train_loader) * args.num_epochs)
 
-        checkpoint = Checkpointer(path=args.save, save_all=args.always_save_checkpoint)
+        checkpoint = Checkpointer(path=args.exp, save_all=args.save_all)
 
         for epoch in range(epoch, args.num_epochs):
             global_step = system.train_one_epoch(epoch, global_step, train_loader)

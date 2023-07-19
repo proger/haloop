@@ -8,15 +8,23 @@ class Checkpointer:
         self.best_loss = float('inf')
         self.save_all = save_all
         self.path = path
+        self.path.mkdir(parents=True, exist_ok=True)
 
     def __call__(self, loss, epoch, checkpoint_fn):
-        should_save = self.save_all or loss <= self.best_loss
-        self.best_loss = min(loss, self.best_loss)
-        if should_save:
-            path = self.path
+        checkpoint = None
+        if self.save_all:
             checkpoint = checkpoint_fn()
-            print(f'saving checkpoint to {path}', flush=True)
-            torch.save(checkpoint, path)
+            path = self.path / f'epoch-{epoch}.pt'
+            print(f'saving checkpoint to {str(path)}', flush=True)
+            torch.save(checkpoint, str(path))
+
+        if loss <= self.best_loss:
+            self.best_loss = loss
+            path = self.path / 'best.pt'
+            if not checkpoint:
+                checkpoint = checkpoint_fn()
+            print(f'saving checkpoint to {str(path)}', flush=True)
+            torch.save(checkpoint, str(path))
 
 
 def construct_path_suffix(
