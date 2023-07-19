@@ -262,6 +262,7 @@ def make_parser():
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
     parser.add_argument('--accumulate', type=int, default=1, help="Gradient accumulation steps")
+    parser.add_argument('--seed', type=int, default=3407, help="Initial random seed")
     parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
 
     LR.add_arguments(parser)
@@ -280,7 +281,7 @@ def main():
     args = make_parser().parse_args()
     log(args)
 
-    torch.manual_seed(3407)
+    torch.manual_seed(args.seed)
 
     models = create_model(args.arch, compile=False).to(args.device)
     system = System(args, models)
