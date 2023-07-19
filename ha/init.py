@@ -27,7 +27,6 @@ class GPTConfig:
     bias: bool = False
     stable_embedding: bool = False
     causal: bool = True
-    cross_attn: bool = False
     d_input: int = 1
     rotary_emb_dim: int = 0
 
@@ -40,7 +39,6 @@ class AudioEncoderConfig(GPTConfig):
     block_size: int = 2048
     vocab_size: int = 128 # assume ascii
     causal: bool = False
-    cross_attn: bool = False
     d_input: int = 80
     rotary_emb_dim: int = 64
 
@@ -50,7 +48,6 @@ class StridingAudioEncoderConfig(GPTConfig):
     block_size: int = 2048
     vocab_size: int = 16384 # assume bpe
     causal: bool = False
-    cross_attn: bool = False
     d_input: int = 80
     rotary_emb_dim: int = 64
     d_conv: int = 256
