@@ -55,7 +55,7 @@ class Recognizer(nn.Module, Decodable):
                 logits1 = logits.to(torch.float32).permute(1, 0, 2) # T, N, C
                 loss = F.ctc_loss(logits1, targets, input_lengths=input_lengths, target_lengths=target_lengths)
                 #loss = ctc_reduce_mean(ctc_forward_score3(logits, targets, input_lengths, target_lengths), target_lengths)
-                return loss
+                return loss, {}
         else:
             with torch.autocast(device_type='cuda', dtype=torch.float32):
                 logits = self.log_probs(features).to(torch.float32)

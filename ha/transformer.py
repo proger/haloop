@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from .recognizer import Decodable
+from .recognizer import Decodable, Recognizer
 
 def sinusoids_like(x, base=10000):
     _, T, C = x.shape
@@ -12,6 +12,27 @@ def sinusoids_like(x, base=10000):
     even = torch.sin((base**exp) * t)
     odd = torch.cos((base**exp) * t)
     return torch.stack([even, odd], dim=-1).flatten(-2, -1)
+
+
+class CTCAttentionDecoder(nn.Module, Decodable):
+    "CTC loss on the encoder, CE loss on the decoder"
+    def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
+        super().__init__()
+        self.decoder = Decoder(context=context, vocab=vocab, head_dim=head_dim, heads=heads, p_drop=p_drop, layers=layers)
+        self.recognizer = Recognizer(feat_dim=head_dim * heads, vocab_size=vocab)
+
+    def forward(
+        self,
+        features, targets, input_lengths=None, target_lengths=None,
+        star_penalty=None,
+        measure_entropy=False,
+    ):
+        decoder_loss, decoder_stats = self.decoder(features, targets, input_lengths, target_lengths, star_penalty, measure_entropy)
+        recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
+        return decoder_loss + 0.3*recognizer_loss, {**decoder_stats, **recognizer_stats}
+
+    def decode(self, features, input_lengths, target_lengths):
+        return self.decoder.decode(features, input_lengths, target_lengths)
 
 
 class Decoder(nn.Module, Decodable):
