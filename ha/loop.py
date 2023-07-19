@@ -273,6 +273,7 @@ def make_parser():
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
+    parser.add_argument('--wandb', action='store_true', help="Always log to wandb")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
     return parser
 
@@ -309,9 +310,10 @@ def main():
 
     log('model parameters', sum(p.numel() for p in system.parameters() if p.requires_grad))
 
-    if args.train:
+    if args.train or args.wandb:
         wandb.init(project='ha', config=args)
 
+    if args.train:
         train_loader = torch.utils.data.DataLoader(
             concat_datasets(args.train),
             collate_fn=Collator(system.vocab),
