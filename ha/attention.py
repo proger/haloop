@@ -87,7 +87,8 @@ class MonitoredSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T', hs)
 
-        y, k, v, att_entropy = attend(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal, dropout_p=self.dropout)
+        y, k, v, att_entropy = attend(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal,
+                                      dropout_p=self.dropout if self.training else 0.0)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
