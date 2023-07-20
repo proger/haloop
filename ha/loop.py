@@ -273,6 +273,7 @@ def make_parser():
 
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
+    parser.add_argument('--test', type=str, default='dev-clean', help="Datasets to run final evaluation on, comma separated")
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
@@ -338,6 +339,17 @@ def main():
             }))
     else:
         system.evaluate(epoch, valid_loader)
+
+    if args.test:
+        test_loader = torch.utils.data.DataLoader(
+            concat_datasets(args.test),
+            collate_fn=Collator(system.vocab),
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+        )
+        system.evaluate(epoch, test_loader)
+
 
 if __name__ == '__main__':
     main()
