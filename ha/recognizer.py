@@ -43,7 +43,7 @@ class TemporalClassifier(nn.Module, Decodable):
         #decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq) # FIXME: speed it up
         return hypotheses, alignments
 
-    def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None):
+    def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None, measure_entropy=False):
         if input_lengths is None:
             input_lengths = torch.full((features.shape[0],), features.shape[1], dtype=torch.long)
         if target_lengths is None:

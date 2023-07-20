@@ -181,7 +181,8 @@ class System(nn.Module):
         self.recognizer.eval()
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
             loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
-            hypotheses, alignments = self.recognizer.decode(features, feature_lengths, target_lengths)
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                hypotheses, alignments = self.recognizer.decode(features, feature_lengths, target_lengths)
 
             valid_loss += loss.item()
 
