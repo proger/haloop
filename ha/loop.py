@@ -274,7 +274,7 @@ def make_parser():
 
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, default='dev-clean', help="Datasets to evaluate on, comma separated")
-    parser.add_argument('--test', type=str, default='dev-clean', help="Datasets to run final evaluation on, comma separated")
+    parser.add_argument('--test', type=str, required=False, help="Datasets to run final evaluation on, comma separated")
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
