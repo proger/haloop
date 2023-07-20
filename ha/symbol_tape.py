@@ -127,7 +127,7 @@ class WordVocabulary(Vocabulary):
         return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text.split()])
 
     def decode(self, ids):
-        return [self.id_to_string[id] for id in ids]
+        return ' '.join([self.id_to_string[id] for id in ids])
 
     def format(self, s):
         return s
