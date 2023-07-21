@@ -25,14 +25,14 @@ def rotate(x, base=10000, interleaved=False):
     sin = torch.sin((base**exp) * t)
     cos = torch.cos((base**exp) * t)
 
-    even, odd = x[..., :, 1::2], x[..., :, ::2]
+    even, odd = x[..., :, 1::2], x[..., :, 0::2]
+    x_ = torch.stack([-even, odd], dim=-1).flatten(-2, -1)
 
-    if interleaved:
-        x_ = torch.stack([-even, odd], dim=-1).mT.flatten(-2, -1)
-    else:
-        x_ = torch.stack([-even, odd], dim=-1).flatten(-2, -1)
-
-    return x * cos + x_ * sin
+    x = x * cos + x_ * sin
+    if interleaved == False:
+        even, odd = x[..., 1::2], x[..., 0::2]
+        x = torch.stack([odd, even], dim=-1).mT.flatten(-2, -1)
+    return x
 
 
 class CTCAttentionDecoder(nn.Module, Decodable):
