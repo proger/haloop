@@ -14,6 +14,27 @@ def sinusoids_like(x, base=10000):
     return torch.stack([even, odd], dim=-1).flatten(-2, -1)
 
 
+def rotate(x, base=10000, interleaved=False):
+    "rotate query or key embedding as in https://arxiv.org/abs/2104.09864"
+    *_, T, C = x.shape
+
+    t = torch.arange(0, T, dtype=torch.float32, device=x.device)[:, None]
+    exp = torch.arange(0, C//2, dtype=torch.float32, device=x.device)[None, :]
+    exp = -2 * exp.repeat_interleave(2, -1) / C
+
+    sin = torch.sin((base**exp) * t)
+    cos = torch.cos((base**exp) * t)
+
+    even, odd = x[..., :, 1::2], x[..., :, ::2]
+
+    if interleaved:
+        x_ = torch.stack([-even, odd], dim=-1).mT.flatten(-2, -1)
+    else:
+        x_ = torch.stack([-even, odd], dim=-1).flatten(-2, -1)
+
+    return x * cos + x_ * sin
+
+
 class CTCAttentionDecoder(nn.Module, Decodable):
     "CTC loss on the encoder, CE loss on the decoder"
     def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
