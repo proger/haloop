@@ -60,7 +60,7 @@ class Decoder(nn.Module, Decodable):
     def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
         super().__init__()
 
-        self.wpe = nn.Embedding(context, head_dim * heads)
+        #self.wpe = nn.Embedding(context, head_dim * heads)
         self.wte = nn.Embedding(vocab, head_dim * heads)
 
         self.h = nn.ModuleList([
@@ -94,12 +94,12 @@ class Decoder(nn.Module, Decodable):
         T = T + 1
 
         # add positional encoding to features
-        features = features + sinusoids_like(features)
+        #features = features + sinusoids_like(features)
 
         stats = {'meme_entropy': [], 'self_entropy': []}
 
         # run all tokens at once
-        y = self.wte(prompt) + self.wpe(torch.arange(T, device=prompt.device))
+        y = self.wte(prompt) # + self.wpe(torch.arange(T, device=prompt.device))
         causal_mask = torch.triu(y.new_ones(T, T), diagonal=1).bool()
         for block in self.h:
             y, (m_ent, t_ent) = block(
@@ -127,12 +127,12 @@ class Decoder(nn.Module, Decodable):
         output_lengths = input_lengths.new_zeros((N,))
 
         # add positional encoding to features
-        features = features + sinusoids_like(features)
+        #features = features + sinusoids_like(features)
 
         x = features.new_zeros((N, 0, self.wte.embedding_dim))
         for t in range(target_lengths.max().item()+1):
             # run one token at a time
-            x_ = self.wte(prompt[:, [t]]) + self.wpe(torch.arange(t, t+1, device=prompt.device))
+            x_ = self.wte(prompt[:, [t]]) #+ self.wpe(torch.arange(t, t+1, device=prompt.device))
             # TODO: use kv caching
             y = x = torch.cat([x, x_], dim=1) # (N, T, C)
 
@@ -180,6 +180,9 @@ class MultiHeadAttention(nn.Module):
         k = k.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
         v = v.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
 
+        #q = rotate(q)
+        #k = rotate(k)
+
         if not measure_entropy:
             x = F.scaled_dot_product_attention(q, k, v, attn_mask=~mask, dropout_p=self.p_drop if self.training else 0)
 
@@ -206,7 +209,21 @@ class Block(nn.Module):
         super().__init__()
 
         self.ln_time = nn.LayerNorm(head_dim * heads)
-        self.mix_time = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
+        if False:
+            self.mix_time = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
+        else:
+            from flash_attn.modules.mha import MHA
+            self.mix_time = MHA(
+                embed_dim=head_dim * heads,
+                num_heads=heads,
+                cross_attn=False,
+                qkv_proj_bias=False,
+                out_proj_bias=False,
+                dropout=p_drop,
+                causal=memory,
+                rotary_emb_dim=head_dim,
+                use_flash_attn=True
+            )
         if memory:
             self.mix_memory = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
         else:
@@ -227,9 +244,10 @@ class Block(nn.Module):
             m, m_ent = self.mix_memory(x, memory, mask=memory_mask[:, None, None, :], measure_entropy=measure_entropy)
             x = x + m
         else:
-            m_ent = float('-inf')
+            m_ent = torch.tensor(float('-inf'))
 
-        t, t_ent = self.mix_time(x, x, mask=time_mask, measure_entropy=measure_entropy)
+        #t, t_ent = self.mix_time(x, x, mask=time_mask, measure_entropy=measure_entropy)
+        t, t_ent = self.mix_time(x), torch.tensor(float('-inf'))
         x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
         return x, (m_ent, t_ent)
