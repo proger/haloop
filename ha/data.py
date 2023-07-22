@@ -7,6 +7,12 @@ import torchaudio
 class LabelFile(torch.utils.data.Dataset):
     def __init__(self, path: Path):
         super().__init__()
+        self.resample = {
+            16000: torch.nn.Identity(), # speech
+            22050: torchaudio.transforms.Resample(orig_freq=22050), # tts data
+            32000: torchaudio.transforms.Resample(orig_freq=32000), # common voice
+            48000: torchaudio.transforms.Resample(orig_freq=48000), # opus
+        }
         with open(path) as f:
             self.ark = dict(line.strip().split(maxsplit=1) for line in f)
             self.filenames = list(self.ark.keys())
@@ -19,8 +25,10 @@ class LabelFile(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         wav, sr = torchaudio.load(self.filenames[index])
-        assert sr == 16000
-        return index, wav, self.ark[self.filenames[index]]
+        resample = self.resample.get(sr)
+        if not resample:
+            raise ValueError(f'unsupported sample rate {sr}, add a resampler to LabelFile.resample')
+        return index, resample(wav), self.ark[self.filenames[index]]
 
 
 class LibriSpeech(torch.utils.data.Dataset):
