@@ -15,18 +15,35 @@ def sinusoids(length, channels, max_timescale=10000):
     return torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1)
 
 
+class DWConv1d(nn.Module):
+    "Depthwise separable convolution"
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, bias=True):
+        super().__init__()
+        self.kernel_size = kernel_size,
+        self.stride = stride,
+        self.padding = padding,
+        self.dilation = dilation,
+        self.bias = bias,
+        self.depthwise = nn.Conv1d(in_channels, in_channels,
+                                   kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation,
+                                   groups=in_channels,
+                                   bias=bias)
+        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        return self.pointwise(self.depthwise(x))
+
+
 class StridingAudioEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
 
         self.config = config
 
-        conv = []
-        d_input = config.d_input
-        for stride in config.conv_strides[:-1]:
-            conv.append(nn.Conv1d(d_input, config.d_conv, kernel_size=3, stride=stride, padding=1))
-            d_input = config.d_conv
-        conv.append(nn.Conv1d(d_input, config.n_embd, kernel_size=3, stride=config.conv_strides[-1], padding=1))
+        conv = [nn.Conv1d(config.d_input, config.d_conv, kernel_size=3, stride=config.conv_strides[0], padding=1)]
+        for stride in config.conv_strides[1:-1]:
+            conv.append(DWConv1d(config.d_conv, config.d_conv, kernel_size=3, stride=stride, padding=1))
+        conv.append(DWConv1d(config.d_conv, config.n_embd, kernel_size=3, stride=config.conv_strides[-1], padding=1))
         self.conv = nn.ModuleList(conv)
 
         assert config.rotary_emb_dim
