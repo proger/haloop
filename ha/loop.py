@@ -15,7 +15,7 @@ from .data import concat_datasets
 from .init import create_model
 from .recognizer import Decodable
 from . import symbol_tape
-from .lr import LR
+from .optim import LR, configure_optimizers
 from .checkpoint import Checkpointer
 
 
@@ -46,7 +46,7 @@ class System(nn.Module):
         self.recognizer: Decodable = models['recognizer']
         self.vocab = symbol_tape.make_vocab(args.vocab)
 
-        self.optimizer = torch.optim.Adam(chain(self.encoder.parameters(), self.recognizer.parameters()))
+        self.optimizer = configure_optimizers(self, args, device_type='cuda', decay_lm_head=False)
         self.scaler = torch.cuda.amp.GradScaler()
         self.lr = LR(args)
 

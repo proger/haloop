@@ -3,12 +3,54 @@
 # 
 
 import inspect
+import math
 import torch
 
 from .attention import LayerNorm
 
 
-def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+class LR:
+    def __init__(self, args):
+        self.args = args
+
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--lr', type=float, default=3e-4, help='AdamW learning rate')
+        parser.add_argument('--lr_schedule', type=str, choices=['const', 'cosine'], default='cosine', help='Learning rate schedule')
+        parser.add_argument('--warmup_iters', type=int, default=2000, help='Number of warm-up steps')
+        parser.add_argument('--lr_decay_iters', type=int, default=200000, help='Number of steps for learning rate decay')
+        parser.add_argument('--min_lr', type=float, default=6e-5, help='Minimum learning rate')
+        parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
+        parser.add_argument('--beta1', type=float, default=0.9, help='Decay factor for first gradient moment')
+        parser.add_argument('--beta2', type=float, default=0.99, help='Decay factor for second gradient moment')
+
+    # learning rate decay scheduler (cosine with warmup)
+    def get_lr(self, it):
+        args = self.args
+
+        if args.lr_schedule == 'cosine':
+            # 1) linear warmup for warmup_iters steps
+            if it < args.warmup_iters:
+                return args.lr * it / args.warmup_iters
+            # 2) if it > lr_decay_iters, return min learning rate
+            if it > args.lr_decay_iters:
+                return args.min_lr
+            # 3) in between, use cosine decay down to min learning rate
+            decay_ratio = (it - args.warmup_iters) / (args.lr_decay_iters - args.warmup_iters)
+            assert 0 <= decay_ratio <= 1
+            coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+            return args.min_lr + coeff * (args.lr - args.min_lr)
+        else:
+            return args.lr
+
+    def apply_lr_(self, optimizer, step):
+        lr = self.get_lr(step)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+        return lr
+
+
+def configure_optimizers(self, args, device_type='cuda', decay_lm_head=True):
     """
     This long function is unfortunately doing something very simple and is being very defensive:
     We are separating out all parameters of the model into two buckets: those that will experience
@@ -37,13 +79,16 @@ def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
                 # weights of blacklist modules will NOT be weight decayed
                 no_decay.add(fpn)
 
-    # subtle: 'transformer.wte.weight' and 'lm_head.weight' are tied, so they
-    # will appear in the no_decay and decay sets respectively after the above.
-    # In addition, because named_parameters() doesn't return duplicates, it
-    # will only return the first occurence, key'd by 'transformer.wte.weight', below.
-    # so let's manually remove 'lm_head.weight' from decay set. This will include
-    # this tensor into optimization via transformer.wte.weight only, and not decayed.
-    decay.remove('lm_head.weight')
+    if decay_lm_head:
+        # for decoder-only models with tied outputs:
+        #
+        # subtle: 'transformer.wte.weight' and 'lm_head.weight' are tied, so they
+        # will appear in the no_decay and decay sets respectively after the above.
+        # In addition, because named_parameters() doesn't return duplicates, it
+        # will only return the first occurence, key'd by 'transformer.wte.weight', below.
+        # so let's manually remove 'lm_head.weight' from decay set. This will include
+        # this tensor into optimization via transformer.wte.weight only, and not decayed.
+        decay.remove('lm_head.weight')
 
     # validate that we considered every parameter
     param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -55,13 +100,13 @@ def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
 
     # create the pytorch optimizer object
     optim_groups = [
-        {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": weight_decay},
+        {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": args.weight_decay},
         {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
     ]
     # new PyTorch nightly has a new 'fused' option for AdamW that is much faster
     use_fused = (device_type == 'cuda') and ('fused' in inspect.signature(torch.optim.AdamW).parameters)
     extra_args = dict(fused=True) if use_fused else dict()
-    optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+    optimizer = torch.optim.AdamW(optim_groups, lr=args.lr, betas=(args.beta1, args.beta2), **extra_args)
 
     return optimizer
 

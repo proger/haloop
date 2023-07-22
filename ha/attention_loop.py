@@ -20,9 +20,8 @@ from torch.distributed import init_process_group, destroy_process_group
 from . import lora
 from .checkpoint import construct_path_suffix, Checkpointer
 from .init import load_model
-from .lr import LR
 from .mlm import mask_tokens
-from .optim import configure_optimizers
+from .optim import LR, configure_optimizers
 
 
 class Formatter(argparse.ArgumentDefaultsHelpFormatter,
@@ -51,13 +50,7 @@ parser.add_argument("--grad_clip", type=float, default=1.0, help="Value to clip 
 
 parser.add_argument("--lora", action="store_true", help="Train LoRA adapter")
 
-# adamw
-parser.add_argument("--learning_rate", type=float, default=2e-4, help="Maximum learning rate")
-parser.add_argument("--weight_decay", type=float, default=1e-2, help="Weight decay")
-parser.add_argument("--beta1", type=float, default=0.9, help="Beta1 for AdamW optimizer")
-parser.add_argument("--beta2", type=float, default=0.99, help="Beta2 for AdamW optimizer")
-
-# lr schedule
+# lr schedule and adamw
 LR.add_arguments(parser)
 
 parser.add_argument("--backend", type=str, default="nccl", help="DDP backend")
