@@ -165,8 +165,10 @@ def create_model(arch: str, compile: bool = True):
                 'recognizer': Transducer(feat_dim=1024, vocab_size=vocab_size),
             })
         case ['audio-transformer']:
-            config = AudioEncoderConfig(dropout=0.1, n_layer=8)
-            encoder = AudioEncoder(config)
+            #config = AudioEncoderConfig(dropout=0.2, n_layer=6)
+            #encoder = AudoEncoder(config)
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1))
+            encoder = StridingAudioEncoder(config)
             from ha.transformer import Decoder
             head_dim = config.n_embd // config.n_head
             decoder = Decoder(
@@ -175,13 +177,29 @@ def create_model(arch: str, compile: bool = True):
                 head_dim=head_dim,
                 heads=config.n_head,
                 p_drop=config.dropout,
-                layers=8
+                layers=4
             )
             model = nn.ModuleDict({
                 'encoder': encoder,
                 'recognizer': decoder,
             })
-
+        case ['audio-transformer-ctc']:
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1))
+            encoder = StridingAudioEncoder(config)
+            from ha.transformer import CTCAttentionDecoder
+            head_dim = config.n_embd // config.n_head
+            decoder = CTCAttentionDecoder(
+                context=config.block_size,
+                vocab=config.vocab_size,
+                head_dim=head_dim,
+                heads=config.n_head,
+                p_drop=config.dropout,
+                layers=4
+            )
+            model = nn.ModuleDict({
+                'encoder': encoder,
+                'recognizer': decoder,
+            })
 
     if compile:
         model = torch.compile(model)
