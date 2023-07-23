@@ -3,10 +3,10 @@ import torch.nn as nn
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=80, subsample_dim=128, hidden_dim=1024):
+    def __init__(self, input_dim=13, subsample_dim=128, hidden_dim=1024):
         super().__init__()
         self.dropout = nn.Dropout(0.2)
-        self.subsample = nn.Conv1d(input_dim, subsample_dim, 5, stride=1, padding=3)
+        self.subsample = nn.Conv1d(input_dim, subsample_dim, kernel_size=5, stride=4, padding=3)
         #self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True)
         self.lstm = nn.LSTM(subsample_dim, hidden_dim, batch_first=True, num_layers=3, dropout=0.2)
 
