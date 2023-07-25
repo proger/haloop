@@ -11,6 +11,7 @@ class LabelFile(torch.utils.data.Dataset):
             16000: torch.nn.Identity(), # speech
             22050: torchaudio.transforms.Resample(orig_freq=22050), # tts data
             32000: torchaudio.transforms.Resample(orig_freq=32000), # common voice
+            44100: torchaudio.transforms.Resample(orig_freq=44100), # common voice
             48000: torchaudio.transforms.Resample(orig_freq=48000), # opus
         }
         with open(path) as f:
@@ -165,7 +166,10 @@ class WordDrop(torch.utils.data.Dataset):
 def make_dataset(s):
     match s.split(':', maxsplit=1):
         case [subset]:
-            return LibriSpeech(subset)
+            if Path(subset).exists():
+                return LabelFile(Path(subset))
+            else:
+                return LibriSpeech(subset)
         case ['labels', label_file]: # over filename
             return LabelFile(Path(label_file))
         case ['head', subset]: # any
