@@ -68,7 +68,7 @@ class Mask(torch.utils.data.Dataset):
 
         frames = torchaudio.functional.mask_along_axis_iid(
             frames,
-            mask_param=16,
+            mask_param=frames.size(-1) // 6,
             mask_value=0,
             axis=3 # frequency
         )
