@@ -140,9 +140,9 @@ class System(nn.Module):
                 continue
 
             scaler.unscale_(optimizer)
-            grad_norm = torch.nn.utils.clip_grad_norm_(chain(self.encoder.parameters(), self.recognizer.parameters()), self.args.clip_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(chain(self.encoder.parameters()), self.args.clip_grad_norm, error_if_nonfinite=False)
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
-                log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch', flush=True)
+                log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch, loss: {loss:.5f}, data: {_batch_indices}', flush=True)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 continue
@@ -262,6 +262,7 @@ def make_parser():
     parser.add_argument('--accumulate', type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument('--seed', type=int, default=3407, help="Initial random seed")
     parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
+    parser.add_argument('--anomaly', action='store_true', help="Detect NaN/Inf during training")
 
     LR.add_arguments(parser)
 
@@ -311,6 +312,9 @@ def main():
 
     if args.train or args.wandb:
         wandb.init(project='ha', config=args, name=str(args.exp))
+
+    if args.anomaly:
+        torch.autograd.set_detect_anomaly(True)
 
     if args.train:
         train_loader = torch.utils.data.DataLoader(
