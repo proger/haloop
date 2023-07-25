@@ -75,6 +75,8 @@ def configure_optimizers(self, args, device_type='cuda', decay_lm_head=True):
             elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
                 # weights of whitelist modules will be weight decayed
                 decay.add(fpn)
+            elif (pn.startswith('bias') or pn.startswith('weight')) and isinstance(m, (torch.nn.LSTM, torch.nn.LSTMCell)):
+                decay.add(fpn)
             elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                 # weights of blacklist modules will NOT be weight decayed
                 no_decay.add(fpn)
