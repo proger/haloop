@@ -7,7 +7,7 @@ from . import xen
 
 
 class Vocabulary:
-    def __init__(self, pad_token="·", unk_token="∞"):
+    def __init__(self, pad_token="·"):
         self.id_to_string = {}
         self.string_to_id = {}
 
@@ -15,13 +15,8 @@ class Vocabulary:
         self.id_to_string[0] = pad_token
         self.string_to_id[pad_token] = 0
 
-        # add the default unknown token
-        self.id_to_string[1] = unk_token
-        self.string_to_id[unk_token] = 1
-
         # shortcut access
-        self.pad_id = 0
-        self.unk_id = 1
+        self.pad_id = self.unk_id = 0
 
     def state_dict(self):
         return {
@@ -115,13 +110,18 @@ class Vocabulary:
 
 
 class WordVocabulary(Vocabulary):
+    def __init__(self):
+        self.id_to_string = {}
+        self.string_to_id = {}
+        self.pad_id = self.unk_id = 0 # default to zeroth token by convention
+
     def get_idx(self, string, extend_vocab=False):
         if string in self.string_to_id:
             return self.string_to_id[string]
         elif extend_vocab:  # add the new word
             return self.add_new_word(string)
         else:
-            return self.unk_id
+            return self.pad_id
 
     def encode(self, text, extend_vocab=False):
         return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text.split()])
@@ -176,7 +176,7 @@ def tokenize_words(text_file, vocab, extend_vocab=True, device='cpu'):
         for line in text:
             for token in line.strip().split():
                 full_text.append(vocab.get_idx(token, extend_vocab=extend_vocab))
-    print(f"Vocabulary size: {len(vocab)}", file=sys.stderr)
+    print(f"{len(vocab)} vocabulary entries: {vocab.string_to_id}", file=sys.stderr)
     data = torch.tensor(full_text, device=device, dtype=torch.int16)
     return data, vocab
 
@@ -268,7 +268,7 @@ class SymbolTape:
 
 
 def make_vocab(vocab_descriptor):
-    "Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt"
+    "Possible values: bytes|ascii|cmu|xen|words:path/to/words.txt|path/to/words.txt"
 
     match vocab_descriptor.split(':', maxsplit=1):
         case ["bytes"]:
@@ -282,8 +282,11 @@ def make_vocab(vocab_descriptor):
         case ["words", path]:
             _, vocab = tokenize_words(path, None)
             return vocab
+        case [path]:
+            _, vocab = tokenize_words(path, None)
+            return vocab
         case _:
-            raise ValueError("Unknown vocabulary descriptor. Possible values: bytes|ascii|cmu|xen|words:path/to/vocab/words.txt")
+            raise ValueError("Unknown vocabulary descriptor. " + make_vocab.__doc__)
 
 
 if __name__ == '__main__':

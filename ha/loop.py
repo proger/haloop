@@ -66,9 +66,6 @@ class System(nn.Module):
         self.recognizer.load_state_dict(checkpoint['recognizer'])
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
-        if 'vocab' in checkpoint:
-            log('loading vocab state')
-            self.vocab.load_state_dict(checkpoint['vocab'])
 
     def make_state_dict(self, **extra):
         return {
@@ -76,7 +73,6 @@ class System(nn.Module):
             'recognizer': self.recognizer.state_dict(),
             'scaler': self.scaler.state_dict(),
             'optimizer': self.optimizer.state_dict(),
-            'vocab': self.vocab.state_dict(),
             'loop_args': self.args,
         } | extra
 
@@ -253,7 +249,7 @@ def make_parser():
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
     parser.add_argument('--arch', type=str, default='recognizer:lstm:128', help=create_model.__doc__)
-    parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|words:path/to/words.txt")
+    parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|path/to/words.txt")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
 
