@@ -176,7 +176,7 @@ def tokenize_words(text_file, vocab, extend_vocab=True, device='cpu'):
         for line in text:
             for token in line.strip().split():
                 full_text.append(vocab.get_idx(token, extend_vocab=extend_vocab))
-    print(f"{len(vocab)} vocabulary entries: {vocab.string_to_id}", file=sys.stderr)
+    print(f"Vocabulary size: {len(vocab)} {vocab.string_to_id} {[vocab.get_idx(i, extend_vocab=False) for i in range(32)]}", file=sys.stderr)
     data = torch.tensor(full_text, device=device, dtype=torch.int16)
     return data, vocab
 
