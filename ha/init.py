@@ -51,7 +51,7 @@ class StridingAudioEncoderConfig(GPTConfig):
     d_input: int = 80
     rotary_emb_dim: int = 64
     d_conv: int = 256
-    conv_strides = (2,2,2)
+    conv_strides: tuple[int, ...] = (2,2,2)
 
 
 
