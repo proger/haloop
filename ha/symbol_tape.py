@@ -69,7 +69,7 @@ class Vocabulary:
 
     @classmethod
     def bytes(cls, n=256):
-        self = Vocabulary(pad_token=0, unk_token=7)
+        self = Vocabulary(pad_token=0)
         self.id_to_string = {}
         self.string_to_id = {}
 
@@ -86,7 +86,7 @@ class Vocabulary:
 
     @classmethod
     def ascii(cls):
-        self = Vocabulary(pad_token=0, unk_token=7)
+        self = Vocabulary(pad_token=0)
         self.id_to_string = {}
         self.string_to_id = {}
 

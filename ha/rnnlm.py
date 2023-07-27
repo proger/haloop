@@ -26,7 +26,7 @@ def make_dataset(
     batch_size, bptt_len = args.batch_size, args.bptt_len
     match str(args.train).rsplit(':', maxsplit=1):
         case ['u16', path]:
-            vocab = Vocabulary(pad_token=0, unk_token=0)
+            vocab = Vocabulary(pad_token=0)
             vocab.id_to_string = {}
             vocab.string_to_id = {}
             for x in range(int(args.vocab)):
