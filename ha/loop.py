@@ -248,7 +248,7 @@ def make_parser():
     parser = argparse.ArgumentParser(formatter_class=Formatter)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
-    parser.add_argument('--arch', type=str, default='recognizer:lstm:128', help=create_model.__doc__)
+    parser.add_argument('--arch', type=str, default='lstm:128', help=create_model.__doc__)
     parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|path/to/words.txt")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")

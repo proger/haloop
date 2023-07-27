@@ -152,6 +152,12 @@ def create_model(arch: str, compile: bool = True):
                 'encoder': encoder,
                 'recognizer': TemporalClassifier(feat_dim=config.n_embd, vocab_size=config.vocab_size),
             })
+        case ['lstm', vocab_size]:
+            vocab_size = int(vocab_size)
+            model = nn.ModuleDict({
+                'encoder': Encoder(hidden_dim=1536),
+                'recognizer': TemporalClassifier(feat_dim=1536, vocab_size=vocab_size),
+            })
         case ['recognizer', encoder_arch, vocab_size]:
             vocab_size = int(vocab_size)
             model = nn.ModuleDict({
