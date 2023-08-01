@@ -254,7 +254,7 @@ def make_parser():
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
 
     parser.add_argument('--exp', type=Path, default='exp/haloop', help="Path to checkpoint directory")
-    parser.add_argument('--save-all', action='store_true', help='Always save a checkpoint after each evaluation')
+    parser.add_argument('--save', choices=['all', 'last+best', 'best'], help='What checkpoints to save after evaluation')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
@@ -328,7 +328,7 @@ def main():
 
         log('total training minibatches:', len(train_loader) * args.num_epochs)
 
-        checkpoint = Checkpointer(path=args.exp, save_all=args.save_all)
+        checkpoint = Checkpointer(path=args.exp, save=args.save)
 
         for epoch in range(epoch, args.num_epochs):
             global_step = system.train_one_epoch(epoch, global_step, train_loader)
@@ -338,8 +338,6 @@ def main():
                 'epoch': epoch,
                 'global_step': global_step,
             }))
-    else:
-        system.evaluate(epoch, valid_loader)
 
     if args.test:
         test_loader = torch.utils.data.DataLoader(

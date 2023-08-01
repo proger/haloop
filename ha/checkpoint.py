@@ -1,25 +1,36 @@
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 import torch
 
 
 class Checkpointer:
-    def __init__(self, path: Path, save_all: bool = False):
+    def __init__(self, path: Path, save: Literal['all', 'best', 'last+best'] = 'best'):
         self.best_loss = float('inf')
-        self.save_all = save_all
+        self.save = save
         self.path = path
         self.path.mkdir(parents=True, exist_ok=True)
 
     def __call__(self, loss, epoch, checkpoint_fn):
         checkpoint = None
-        if self.save_all:
+        if best := (loss <= self.best_loss):
+            self.best_loss = loss
+
+        save = self.save == 'all'
+        if best and 'best' in self.save:
+            save = True
+
+        if self.save == 'all':
             checkpoint = checkpoint_fn()
             path = self.path / f'epoch-{epoch}.pt'
             print(f'saving checkpoint to {str(path)}', flush=True)
             torch.save(checkpoint, str(path))
+        elif self.save == 'last+best':
+            checkpoint = checkpoint_fn()
+            path = self.path / f'last.pt'
+            print(f'saving checkpoint to {str(path)}', flush=True)
+            torch.save(checkpoint, str(path))
 
-        if loss <= self.best_loss:
-            self.best_loss = loss
+        if best:
             path = self.path / 'best.pt'
             if not checkpoint:
                 checkpoint = checkpoint_fn()
