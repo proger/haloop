@@ -1,6 +1,6 @@
 import argparse
-from collections import Counter
-from itertools import chain
+from collections import Counter, defaultdict
+from itertools import chain, pairwise
 from pathlib import Path
 import sys
 import time
@@ -167,77 +167,122 @@ class System(nn.Module):
         return global_step
 
     @torch.inference_mode()
-    def evaluate(self, epoch, valid_loader):
+    def evaluate(self, epoch, loader, attempts=1):
         valid_loss = 0.
         label_errors = Counter()
         word_errors = Counter()
 
-        self.eval()
-        self.encoder.eval()
-        self.recognizer.eval()
-        for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(valid_loader):
+        if attempts > 1:
+            self.train()
+            self.encoder.train()
+            self.recognizer.train()
+            est_word_errors = Counter()
+        else:
+            self.eval()
+            self.encoder.eval()
+            self.recognizer.eval()
+
+        for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(loader):
             loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                hypotheses, alignments = self.recognizer.decode(features, feature_lengths, target_lengths)
 
-            valid_loss += loss.item()
+            collected_hypotheses = defaultdict(list)
+            gt_wer = {}
 
-            for dataset_index, ref, ref_len, hyp_, ali_, feat_len in zip(
-                dataset_indices, targets, target_lengths, hypotheses, alignments, feature_lengths
-            ):
-                stat = {}
-                hyp = hyp_.cpu().tolist()
-                ali = ali_[:feat_len].cpu().tolist() if ali_ is not None else []
-                ref = ref[:ref_len].cpu().tolist()
+            for attempt in range(attempts):
+                with torch.autocast(device_type='cuda', dtype=torch.float16):
+                    hypotheses, alignments = self.recognizer.decode(features, feature_lengths, target_lengths)
 
-                hyp1 = self.vocab.decode(hyp)
-                ref1 = self.vocab.decode(ref)
+                valid_loss += loss.item()
 
-                stat |= edit_distance(hyp1, ref1)
-                stat['length'] = len(ref1)
-                ler = stat['total'] / stat['length']
-                stat['ler'] = round(ler, 2)
-                label_errors += Counter(stat)
+                for dataset_index, ref, ref_len, hyp_, ali_, feat_len in zip(
+                    dataset_indices, targets, target_lengths, hypotheses, alignments, feature_lengths
+                ):
+                    k = dataset_index.item()
+                    label_error, word_error, hyp = self.print_example(k, ref, ref_len, hyp_, ali_, feat_len, epoch=epoch, attempt=attempt)
+                    label_errors += label_error
+                    word_errors += word_error
+                    collected_hypotheses[k].append(hyp)
+                    gt_wer[k] = word_error['total'] / word_error['length']
 
-                ref_words = ref1.split()
-                word_dist = edit_distance(hyp1.split(), ref_words)
-                word_dist['length'] = len(ref_words)
-                wer = word_dist['total'] / word_dist['length']
-                stat['wer'] = round(wer, 2)
-                word_errors += Counter(word_dist)
+            if attempts > 1:
+                e, est_wer = self.estimate_wer(collected_hypotheses)
+                est_word_errors += e
 
-                if self.args.quiet:
-                    continue
-
-                ali = self.vocab.decode(ali)
-
-                if isinstance(ref1, list):
-                    star = '␣'
-                    hyp, ref = list(zip(*align(hyp1, ref1, star)))
-                    ali = tuple(ali)
-                elif isinstance(ref1, str):
-                    star = '␣'
-                    hyp, ref = list(zip(*align(hyp1, ref1, star)))
-                    hyp, ref = ''.join(hyp), ''.join(ref)
-                else:
-                    star = 42 # b'*'
-                    hyp, ref = list(zip(*align(hyp1, ref1, star)))
-                    hyp, ref = bytes(hyp), bytes(ref)
-
-                dataset_index = dataset_index.item()
-                print(epoch, dataset_index, 'hyp', self.vocab.format(hyp), sep="\t", flush=True)
-                print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
-                if ali:
-                    print(epoch, dataset_index, 'ali', self.vocab.format(ali), sep="\t", flush=True)
-                print(epoch, dataset_index, 'stat', ' '.join(f'{k}={stat[k]}' for k in stat), sep="\t", flush=True)
+                for k in est_wer:
+                    print(epoch, k, f'est-wer: {est_wer[k]:.3f}', f'gt-wer: {gt_wer[k]:.3f}', sep="\t", flush=True)
 
         count = i + 1
         ler = round(label_errors['total'] / label_errors['length'], 3)
         wer = round(word_errors['total'] / word_errors['length'], 3)
         log(f'valid [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f} wer: {wer:.3f}', flush=True)
+        if attempts > 1:
+            est_wer = round(est_word_errors['total'] / est_word_errors['length'], 3)
+            log(f'valid [{epoch}, {i + 1:5d}] estimated-wer: {est_wer:.3f} diff-wer: {wer - est_wer:.3f}', flush=True)
         if wandb.run is not None:
             wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler, 'valid/wer': wer})
         return valid_loss / count
+
+    def estimate_wer(self, hypotheses):
+        # estimate WER from multiple hypotheses
+        est_word_errors = Counter()
+        est_wer = {}
+        for k in hypotheses:
+            errors, lengths, counts = 0, 0, 0
+            for l, r in pairwise(hypotheses[k]):
+                errors += edit_distance(l, r)['total']
+                lengths += len(r)
+                counts += 1
+            est_word_errors += Counter({'total': errors / counts, 'length': lengths / counts})
+            est_wer[k] = errors / lengths
+        return est_word_errors, est_wer
+
+    def print_example(self, dataset_index, ref, ref_len, hyp_, ali_, feat_len, epoch, attempt=0):
+        stat = {}
+        hyp = hyp_.cpu().tolist()
+        ali = ali_[:feat_len].cpu().tolist() if ali_ is not None else []
+        ref = ref[:ref_len].cpu().tolist()
+
+        hyp1 = self.vocab.decode(hyp)
+        ref1 = self.vocab.decode(ref)
+
+        stat |= edit_distance(hyp1, ref1)
+        stat['length'] = len(ref1)
+        ler = stat['total'] / stat['length']
+        stat['ler'] = round(ler, 2)
+        label_error = Counter(stat)
+
+        ref_words = ref1.split()
+        word_dist = edit_distance(hyp1.split(), ref_words)
+        word_dist['length'] = len(ref_words)
+        wer = word_dist['total'] / word_dist['length']
+        stat['wer'] = round(wer, 2)
+        word_error = Counter(word_dist)
+
+        if self.args.quiet:
+            return label_error, word_error
+
+        ali = self.vocab.decode(ali)
+
+        if isinstance(ref1, list):
+            star = '␣'
+            hyp, ref = list(zip(*align(hyp1, ref1, star)))
+            ali = tuple(ali)
+        elif isinstance(ref1, str):
+            star = '␣'
+            hyp, ref = list(zip(*align(hyp1, ref1, star)))
+            hyp, ref = ''.join(hyp), ''.join(ref)
+        else:
+            star = 42 # b'*'
+            hyp, ref = list(zip(*align(hyp1, ref1, star)))
+            hyp, ref = bytes(hyp), bytes(ref)
+
+        print(epoch, dataset_index, f'hyp{attempt}', self.vocab.format(hyp), sep="\t", flush=True)
+        print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
+        if ali:
+            print(epoch, dataset_index, f'ali{attempt}', self.vocab.format(ali), sep="\t", flush=True)
+        print(epoch, dataset_index, f'stat{attempt}', ' '.join(f'{k}={stat[k]}' for k in stat), sep="\t", flush=True)
+
+        return label_error, word_error, hyp
 
 
 def make_parser():
@@ -272,6 +317,8 @@ def make_parser():
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, help="Datasets to evaluate on, comma separated")
     parser.add_argument('--test', type=str, required=False, help="Datasets to run final evaluation (test) on, comma separated")
+    parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
+
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
@@ -352,7 +399,7 @@ def main():
         system.evaluate(epoch, valid_loader)
 
     if args.test:
-        system.evaluate(epoch, test_loader)
+        system.evaluate(epoch, test_loader, attempts=args.test_attempts)
 
 
 if __name__ == '__main__':
