@@ -1,12 +1,28 @@
-import torch
 from pathlib import Path
 import sys
 import math
+from typing import Protocol
+
+import torch
 
 from . import xen
 
 
-class Vocabulary:
+class DictionaryLike(Protocol):
+    def encode(self, text: str | bytes | list[int], extend_vocab=False) -> torch.LongTensor:
+        ...
+
+    def decode(self, ids: torch.LongTensor) -> str:
+        ...
+
+    def format(self, s: str | bytes) -> str:
+        ...
+
+    def get_idx(self, string, extend_vocab=False) -> int:
+        ...
+
+
+class Vocabulary(DictionaryLike):
     def __init__(self, pad_token="·"):
         self.id_to_string = {}
         self.string_to_id = {}
@@ -281,6 +297,11 @@ def make_vocab(vocab_descriptor):
             return xen.Vocabulary(add_closures=True)
         case ["words", path]:
             _, vocab = tokenize_words(path, None)
+            return vocab
+        case ["512"]:
+            vocab = WordVocabulary()
+            for word in range(512):
+                vocab.get_idx(str(word), extend_vocab=True)
             return vocab
         case [path]:
             _, vocab = tokenize_words(path, None)

@@ -165,11 +165,6 @@ class WordDrop(torch.utils.data.Dataset):
 
 def make_dataset(s):
     match s.split(':', maxsplit=1):
-        case [subset]:
-            if Path(subset).exists():
-                return LabelFile(Path(subset))
-            else:
-                return LibriSpeech(subset)
         case ['labels', label_file]: # over filename
             return LabelFile(Path(label_file))
         case ['head', subset]: # any
@@ -186,7 +181,17 @@ def make_dataset(s):
             return MFCC(make_dataset(subset))
         case ['fbank', subset]: # applies over waveforms
             return Fbank(make_dataset(subset))
-
+        case ['sinusoids']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(max=3000)
+        case ['sinusoids-eval']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(max=3000, seed_offset=100000000)
+        case [subset]:
+            if Path(subset).exists():
+                return LabelFile(Path(subset))
+            else:
+                return LibriSpeech(subset)
 
 def concat_datasets(s):
     if not s:

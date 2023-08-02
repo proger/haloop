@@ -4,14 +4,7 @@ import torch.nn.functional as F
 import math
 
 from .recognizer import Decodable, TemporalClassifier
-
-def sinusoids_like(x, base=10000):
-    _, T, C = x.shape
-    t = torch.arange(0, T, dtype=x.dtype, device=x.device)[:, None]
-    exp = -torch.arange(0, C, 2, dtype=x.dtype, device=x.device) / C
-    even = torch.sin((base**exp) * t)
-    odd = torch.cos((base**exp) * t)
-    return torch.stack([even, odd], dim=-1).flatten(-2, -1)
+from .sinusoids import sinusoids_like
 
 
 def rotate(x, base=10000, interleaved=False):
