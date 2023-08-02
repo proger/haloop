@@ -95,16 +95,15 @@ train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
 val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
 
 if master_process:
-    ckpt_path = Path(args.save)
     ckpt_suffix = construct_path_suffix(
         vars(args),
         vars(args),
         always_include=["init", "learning_rate", "max_iters", "weight_decay", "beta1", "beta2", "grad_clip", "min_lr"],
-        always_ignore=["ckpt_path", "train_bin", "valid_bin", "wandb_log", "wandb_project", "compile"],
+        always_ignore=["exp", "save", "train_bin", "valid_bin", "wandb_log", "wandb_project", "compile"],
     )
-    ckpt_path = ckpt_path.parent / f"{ckpt_path.stem}__{ckpt_suffix}{ckpt_path.suffix}"
+    ckpt_path = args.exp / f"{ckpt_path.stem}__{ckpt_suffix}{ckpt_path.suffix}"
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = Checkpointer(path=ckpt_path, save_all=args.always_save_checkpoint)
+    checkpoint = Checkpointer(path=ckpt_path, save=args.save)
     print(f"Saving checkpoint to {ckpt_path}")
 
 def get_batch(data: np.ndarray,

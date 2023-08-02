@@ -232,12 +232,12 @@ def main():
     print(model)
     if hasattr(model, 'config'):
         print(model.config)
-        Checkpointer(args.path, save_all=True)(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: {
+        Checkpointer(args.path, save='all')(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: {
             'model': model.state_dict(),
             'model_args': model.config.state_dict()
         })
     else:
-        Checkpointer(args.path, save_all=True)(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: model.state_dict())
+        Checkpointer(args.path, save='all')(loss=float('inf'), epoch=-1, checkpoint_fn=lambda: model.state_dict())
 
 
 if __name__ == '__main__':
