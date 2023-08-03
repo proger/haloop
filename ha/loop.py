@@ -299,7 +299,7 @@ def make_parser():
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
 
     parser.add_argument('--exp', type=Path, default='exp/haloop', help="Path to checkpoint directory")
-    parser.add_argument('--save', choices=['all', 'last+best', 'best'], help='What checkpoints to save after evaluation')
+    parser.add_argument('--save', type=str, default='last+best', choices=['all', 'last+best', 'best'], help='What checkpoints to save after evaluation')
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
