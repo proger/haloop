@@ -33,7 +33,7 @@ class SyntheticAlignments(torch.utils.data.Dataset):
 
         repeats = torch.randint(5, 20, (time_steps,), generator=generator)
         repeats = torch.poisson(repeats.float(), generator=generator).int()
-        targets = torch.randint(0, self.vocab_size, (time_steps,), generator=generator)
+        targets = torch.randint(1, self.vocab_size, (time_steps,), generator=generator)
         total_frames = repeats.cumsum(0)
 
         alignments = torch.cat([torch.tensor([t]*r) for t, r, T in zip(targets, repeats, total_frames) if T < time_steps]).int()
