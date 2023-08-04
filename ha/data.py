@@ -181,12 +181,24 @@ def make_dataset(s):
             return MFCC(make_dataset(subset))
         case ['fbank', subset]: # applies over waveforms
             return Fbank(make_dataset(subset))
-        case ['sinusoids']: # synthetic
+        case ['sinusoids0']: # synthetic
             from ha.sinusoids import SyntheticAlignments
-            return SyntheticAlignments(max=3000)
+            return SyntheticAlignments(examples_per_bin=100000, max=100)
+        case ['sinusoids1']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(examples_per_bin=30000, max=500)
+        case ['sinusoids2']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(examples_per_bin=15000, max=1000)
+        case ['sinusoids3']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(examples_per_bin=5000, max=2000)
+        case ['sinusoids4']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(examples_per_bin=5000, max=3000)
         case ['sinusoids-eval']: # synthetic
             from ha.sinusoids import SyntheticAlignments
-            return SyntheticAlignments(max=3000, seed_offset=100000000)
+            return SyntheticAlignments(examples_per_bin=10, max=3000, seed_offset=100000000)
         case [subset]:
             if Path(subset).exists():
                 return LabelFile(Path(subset))
