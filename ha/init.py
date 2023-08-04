@@ -189,8 +189,8 @@ def create_model(arch: str, compile: bool = True):
                 'encoder': encoder,
                 'recognizer': decoder,
             })
-        case ['audio-transformer-ctc']:
-            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1))
+        case ['audio-transformer-ctc', vocab_size]:
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
             encoder = StridingAudioEncoder(config)
             from ha.transformer import CTCAttentionDecoder
             head_dim = config.n_embd // config.n_head
@@ -200,12 +200,14 @@ def create_model(arch: str, compile: bool = True):
                 head_dim=head_dim,
                 heads=config.n_head,
                 p_drop=config.dropout,
-                layers=4
+                layers=6 # 4 in other experiments
             )
             model = nn.ModuleDict({
                 'encoder': encoder,
                 'recognizer': decoder,
             })
+        case ['audio-transformer-ctc']:
+            return create_model('audio-transformer-ctc:16384', compile=compile)
 
     if compile:
         model = torch.compile(model)
