@@ -22,7 +22,7 @@ class SyntheticAlignments(torch.utils.data.Dataset):
         self.examples_per_bin = examples_per_bin
         self.vocab_size = vocab_size
         self.seed_offset = seed_offset
-        self.sinusoids = sinusoids_like(torch.randn(1, vocab_size, dim))
+        self.sinusoids = sinusoids_like(torch.zeros(1, vocab_size, dim))
 
     def __len__(self):
         return self.bins * self.examples_per_bin
@@ -36,7 +36,8 @@ class SyntheticAlignments(torch.utils.data.Dataset):
         while t < time_steps:
             duration = torch.randint(10, 20, (1,), generator=generator).item()
             durations.append(duration)
-            target = torch.randint(1, self.vocab_size, (1,), generator=generator).item()
+            # 0 is pad, 1 is ???, 2 is stx, 3 is etx
+            target = torch.randint(4, self.vocab_size, (1,), generator=generator).item()
             targets.append(target)
             t += duration
         
@@ -48,7 +49,7 @@ class SyntheticAlignments(torch.utils.data.Dataset):
 if __name__ == '__main__':
     V = 512
     #torch.manual_seed(2)
-    sinusoids = sinusoids_like(torch.randn(1, V, 80))
+    sinusoids = sinusoids_like(torch.zeros(1, V, 80))
 
     alignments = SyntheticAlignments(examples_per_bin=1000000, max=100)
     #alignments = SyntheticAlignments(examples_per_bin=20000, max=3000)

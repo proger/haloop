@@ -196,6 +196,9 @@ def make_dataset(s):
         case ['sinusoids4']: # synthetic
             from ha.sinusoids import SyntheticAlignments
             return SyntheticAlignments(examples_per_bin=5000, max=3000)
+        case ['sinusoids5']: # synthetic
+            from ha.sinusoids import SyntheticAlignments
+            return SyntheticAlignments(examples_per_bin=5000, max=4000, seed_offset=200000000)
         case ['sinusoids-eval']: # synthetic
             from ha.sinusoids import SyntheticAlignments
             return SyntheticAlignments(examples_per_bin=10, max=3000, seed_offset=100000000)
