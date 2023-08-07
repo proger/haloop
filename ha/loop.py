@@ -15,6 +15,7 @@ from .data import concat_datasets
 from .init import create_model
 from .recognizer import Decodable
 from . import symbol_tape
+from .monitor import register_activation_stat_hooks, print_activation_stat_hooks
 from .optim import LR, configure_optimizers
 from .checkpoint import Checkpointer
 
@@ -42,6 +43,7 @@ class System(nn.Module):
         super().__init__()
         self.args = args
 
+        self.models = models
         self.encoder = models['encoder']
         self.recognizer: Decodable = models['recognizer']
         self.vocab = symbol_tape.make_vocab(args.vocab)
@@ -108,7 +110,7 @@ class System(nn.Module):
 
         return loss, features, feature_lengths
 
-    def train_one_epoch(self, epoch, global_step, train_loader):
+    def train_one_epoch(self, epoch, global_step, train_loader, valid_loader):
         optimizer, scaler = self.optimizer, self.scaler
 
         optimizer.zero_grad()
@@ -117,15 +119,13 @@ class System(nn.Module):
         t0 = time.time()
         local_step, accumulate = 0, 0
 
-        self.train()
-        self.encoder.train()
-        self.recognizer.train()
+        self.models.train()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
 
             if torch.isnan(loss):
                 log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
-                scaler.update()
+                #scaler.update()
                 continue
 
             if torch.isinf(loss):
@@ -164,6 +164,10 @@ class System(nn.Module):
             t0 = t1
             train_loss = 0.
 
+            if local_step % self.args.evaluate_every == 0:
+                self.evaluate(epoch, valid_loader, attempts=1)
+                self.models.train()
+
         return global_step
 
     @torch.inference_mode()
@@ -173,17 +177,19 @@ class System(nn.Module):
         word_errors = Counter()
 
         if attempts > 1:
-            self.train()
-            self.encoder.train()
-            self.recognizer.train()
+            self.models.train()
             est_word_errors = Counter()
         else:
-            self.eval()
-            self.encoder.eval()
-            self.recognizer.eval()
+            self.models.eval()
+
+        hook_handles = register_activation_stat_hooks(self.models)
 
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(loader):
             loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
+            if i == 0:
+                print_activation_stat_hooks(self.models)
+                for hook_handle in hook_handles:
+                    hook_handle.remove()
 
             collected_hypotheses = defaultdict(list)
             gt_wer = {}
@@ -316,6 +322,7 @@ def make_parser():
 
     parser.add_argument('--train', type=str, help="Datasets to train on, comma separated")
     parser.add_argument('--eval', type=str, help="Datasets to evaluate on, comma separated")
+    parser.add_argument('--evaluate-every', type=int, default=10000, help="Evaluate every this many steps during the training epoch")
     parser.add_argument('--test', type=str, required=False, help="Datasets to run final evaluation (test) on, comma separated")
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
 
@@ -388,7 +395,7 @@ def main():
         checkpoint = Checkpointer(path=args.exp, save=args.save)
 
         for epoch in range(epoch, args.num_epochs):
-            global_step = system.train_one_epoch(epoch, global_step, train_loader)
+            global_step = system.train_one_epoch(epoch, global_step, train_loader, valid_loader)
             valid_loss = system.evaluate(epoch, valid_loader)
             checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict(**{
                 'best_valid_loss': valid_loss,
