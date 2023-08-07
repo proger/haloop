@@ -1,19 +1,20 @@
-from dataclasses import dataclass, asdict
-from pathlib import Path
-import sys
-
 import math
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from . import lora
-from .checkpoint import Checkpointer
 from .attention import GPT
 from .attention_audio import AudioEncoder, StridingAudioEncoder
-from .rnn import Encoder, Decoder
-from .resnet import FixupResNet, FixupBasicBlock
+from .checkpoint import Checkpointer
 from .recognizer import TemporalClassifier, Transducer
+from .resnet import FixupBasicBlock, FixupResNet
+from . import transformer
+from . import rnn
 
 
 @dataclass
@@ -107,7 +108,7 @@ def create_model(arch: str, compile: bool = True):
             gptconf = GPTConfig(block_size=128, causal=False)
             model = GPT(gptconf)
         case ['lstm']:
-            model = Encoder()
+            model = rnn.Encoder()
         case ['rnnlm']:
             model = Decoder(vocab_size=256,
                             emb_dim=2048,
@@ -155,7 +156,7 @@ def create_model(arch: str, compile: bool = True):
         case ['lstm', vocab_size]:
             vocab_size = int(vocab_size)
             model = nn.ModuleDict({
-                'encoder': Encoder(hidden_dim=1536),
+                'encoder': rnn.Encoder(hidden_dim=1536),
                 'recognizer': TemporalClassifier(feat_dim=1536, vocab_size=vocab_size),
             })
         case ['recognizer', encoder_arch, vocab_size]:
@@ -172,7 +173,7 @@ def create_model(arch: str, compile: bool = True):
             })
         case ['audio-transformer']:
             #config = AudioEncoderConfig(dropout=0.2, n_layer=6)
-            #encoder = AudoEncoder(config)
+            #encoder = AudioEncoder(config)
             config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1))
             encoder = StridingAudioEncoder(config)
             from ha.transformer import Decoder
@@ -185,29 +186,50 @@ def create_model(arch: str, compile: bool = True):
                 p_drop=config.dropout,
                 layers=4
             )
-            model = nn.ModuleDict({
-                'encoder': encoder,
-                'recognizer': decoder,
-            })
-        case ['audio-transformer-ctc', vocab_size]:
+            model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
+        case ['e6ctc-d4', vocab_size]:
             config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
             encoder = StridingAudioEncoder(config)
             from ha.transformer import CTCAttentionDecoder
             head_dim = config.n_embd // config.n_head
-            decoder = CTCAttentionDecoder(
-                context=config.block_size,
-                vocab=config.vocab_size,
-                head_dim=head_dim,
-                heads=config.n_head,
-                p_drop=config.dropout,
-                layers=6 # 4 in other experiments
-            )
-            model = nn.ModuleDict({
-                'encoder': encoder,
-                'recognizer': decoder,
-            })
+            decoder = CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size,
+                                          head_dim=head_dim, heads=config.n_head,
+                                          p_drop=config.dropout, layers=4)
+            model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
         case ['audio-transformer-ctc']:
-            return create_model('audio-transformer-ctc:16384', compile=compile)
+            return create_model('e6ctc-d4:16384', compile=compile)
+        case ['e6ctc-d6', vocab_size]:
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
+            encoder = StridingAudioEncoder(config)
+            head_dim = config.n_embd // config.n_head
+            decoder = transformer.CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size,
+                                                      head_dim=head_dim, heads=config.n_head,
+                                                      p_drop=config.dropout, layers=6)
+            model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
+        case ['e6d6', vocab_size]:
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
+            encoder = StridingAudioEncoder(config)
+            head_dim = config.n_embd // config.n_head
+            decoder = transformer.Decoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
+                                          heads=config.n_head, p_drop=config.dropout, layers=6)
+            model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
+        case ['e12ctc-d12', vocab_size]:
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=12, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
+            encoder = StridingAudioEncoder(config)
+            head_dim = config.n_embd // config.n_head
+            decoder = transformer.CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
+                                          heads=config.n_head, p_drop=config.dropout, layers=12)
+            model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
+        case ['e12d12', vocab_size]:
+            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=12, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
+            encoder = StridingAudioEncoder(config)
+            head_dim = config.n_embd // config.n_head
+            decoder = transformer.Decoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
+                                          heads=config.n_head, p_drop=config.dropout, layers=12)
+            model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
+
+        case _:
+            raise ValueError(f'unknown architecture {arch}')
 
     if compile:
         model = torch.compile(model)
