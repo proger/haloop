@@ -40,7 +40,7 @@ class SyntheticAlignments(torch.utils.data.Dataset):
             target = torch.randint(4, self.vocab_size, (1,), generator=generator).item()
             targets.append(target)
             t += duration
-        
+
         alignments = torch.cat([torch.LongTensor([t]*r) for t, r in zip(targets, durations)])
         inputs = self.sinusoids[alignments, :]
         return index, inputs, " ".join(map(str, targets))
@@ -48,7 +48,7 @@ class SyntheticAlignments(torch.utils.data.Dataset):
 
 if __name__ == '__main__':
     V = 512
-    #torch.manual_seed(2)
+    torch.manual_seed(2)
     sinusoids = sinusoids_like(torch.zeros(1, V, 80))
 
     alignments = SyntheticAlignments(examples_per_bin=1000000, max=100)
@@ -56,18 +56,20 @@ if __name__ == '__main__':
 
     import matplotlib.pyplot as plt
 
-    if False:
-        _, seq, frames = alignments[5]
-        fig, (top, bot) = plt.subplots(2, 1, sharex=True, sharey=True, figsize=(8, 2))
-        top.matshow(sinusoids.T, cmap='Blues', aspect=1)
-        bot.matshow(seq.T, cmap='Greens', aspect=1)
-        top.set_axis_off()
-        bot.set_axis_off()
-        top.set_anchor('W')
-        bot.set_anchor('W')
-        top.text(-2.0,-2.0, f'frame bank: {V} examples', size=5)
-        bot.text(-2.0,-2.0, f'targets: {frames}', size=3)
-        plt.savefig('sinusoids.png', dpi=300, bbox_inches='tight')
+    if True:
+        bases = [10, 50, 100, 200, 500, 700, 1000]
+        B = len(bases)
+        fig, axs = plt.subplots(B, 1, sharex=True, sharey=True, figsize=(8, B))
+
+        for ax, base in zip(axs, bases):
+            sinusoids = sinusoids_like(torch.zeros(1, V, 80), base=base)
+
+            ax.matshow(sinusoids.T, cmap='Blues', aspect=1)
+            ax.set_axis_off()
+            ax.set_anchor('W')
+            ax.text(-2.0,-2.0, f'base: {base}', size=5)
+        plt.savefig('bases.png', dpi=300, bbox_inches='tight')
+        print('plotting different sinusoid bases into bases.png')
     else:
         N = 16
         indices = torch.randint(0, len(alignments), (N,)).tolist()
@@ -81,3 +83,4 @@ if __name__ == '__main__':
             ax.text(-2.0,-2.0, f'{frames}', size=4)
 
         plt.savefig('sinusoids16.png', dpi=300, bbox_inches='tight')
+        print('plotting example sinusoid batch of 16 into sinusoids16.png')
