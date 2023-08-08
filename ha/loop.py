@@ -297,7 +297,7 @@ def make_parser():
         pass
 
     parser = argparse.ArgumentParser(formatter_class=Formatter)
-    parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
+    parser.add_argument('--init', type=Path, nargs='+', help="Path to checkpoint(s) to initialize from")
     parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
     parser.add_argument('--arch', type=str, default='lstm:128', help=create_model.__doc__)
     parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|path/to/words.txt")
@@ -361,8 +361,17 @@ def main():
 
     epoch, global_step = 0, 0
     if args.init:
-        checkpoint = torch.load(args.init, map_location=args.device)
+        checkpoint = torch.load(args.init[0], map_location=args.device)
         system.load_state_dict(checkpoint)
+        if len(args.init) > 1:
+            log('averaging models')
+            avg_model = torch.optim.swa_utils.AveragedModel(system)
+            for m in args.init[1:]:
+                checkpoint = torch.load(m, map_location=args.device)
+                system.load_state_dict(checkpoint)
+                avg_model.update_parameters(system)
+            system = avg_model.module
+
         if not args.reset:
             epoch = checkpoint.get('epoch', -1) + 1
             global_step = checkpoint.get('global_step', -1) + 1
