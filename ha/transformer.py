@@ -1,3 +1,4 @@
+from collections import namedtuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,6 +6,9 @@ import math
 
 from .recognizer import Decodable, TemporalClassifier
 from .sinusoids import sinusoids_like
+
+BlockKVCache = namedtuple('BlockKVCache', ['memory', 'time'])
+Stats = namedtuple('Stats', ['meme_entropy', 'self_entropy'])
 
 
 def rotate(x, base=10000, interleaved=False):
@@ -89,24 +93,24 @@ class Decoder(nn.Module, Decodable):
         # add positional encoding to features
         #features = features + sinusoids_like(features)
 
-        stats = {'meme_entropy': [], 'self_entropy': []}
+        stats = Stats(meme_entropy=[], self_entropy=[])
 
         # run all tokens at once
         y = self.wte(prompt) # + self.wpe(torch.arange(T, device=prompt.device))
         causal_mask = torch.triu(y.new_ones(T, T), diagonal=1).bool()
         for block in self.h:
-            y, (m_ent, t_ent) = block(
+            y, (m_ent, t_ent), _ = block(
                 y,
                 time_mask=causal_mask, memory=features, memory_lengths=input_lengths,
                 measure_entropy=measure_entropy
             )
-            stats['meme_entropy'].append(m_ent)
-            stats['self_entropy'].append(t_ent)
+            stats.meme_entropy.append(m_ent)
+            stats.self_entropy.append(t_ent)
 
         logits = self.lm_head(self.ln_f(y)) # (N, T, V)
 
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0)
-        return loss, stats
+        return loss, stats._asdict()
 
     def decode(self, features, input_lengths, target_lengths):
         "Perform batched greedy decoding."
@@ -122,16 +126,22 @@ class Decoder(nn.Module, Decodable):
         # add positional encoding to features
         #features = features + sinusoids_like(features)
 
+        kv_cache = [BlockKVCache(memory=None, time=None)]*len(self.h)
+
         x = features.new_zeros((N, 0, self.wte.embedding_dim))
         for t in range(target_lengths.max().item()+1):
             # run one token at a time
             x_ = self.wte(prompt[:, [t]]) #+ self.wpe(torch.arange(t, t+1, device=prompt.device))
-            # TODO: use kv caching
             y = x = torch.cat([x, x_], dim=1) # (N, T, C)
 
             causal_mask = torch.triu(x.new_ones(t+1, t+1), diagonal=1).bool()
-            for block in self.h:
-                y, _ = block(y, time_mask=causal_mask, memory=features, memory_lengths=input_lengths)
+            for i, block in enumerate(self.h):
+                y, _, kv_cache[i] = block(
+                    y,
+                    time_mask=causal_mask, memory=features, memory_lengths=input_lengths,
+                    measure_entropy=False,
+                    kv_cache=kv_cache[i],
+                )
             logits = self.lm_head(self.ln_f(y[:, t, :])) # (N, 1, V)
 
             # ignore output on completed sequences
@@ -160,18 +170,22 @@ class MultiHeadAttention(nn.Module):
         self.p_drop = p_drop
         self.dropout = nn.Dropout(p_drop)
 
-    def forward(self, x, memory, mask=None, measure_entropy=False):
+    def forward(self, x, memory, *, mask=None, measure_entropy=False, kv_cache=None):
         N, T, _C = x.shape
         N, S, _C = memory.shape
         heads, head_dim = self.heads, self.head_dim
 
         q = self.q(x) # (N, T, head_dim * heads)
-        k = self.k(memory) # (N, S, head_dim * heads)
-        v = self.v(memory) # (N, S, head_dim * heads)
-
         q = q.view(N, T, heads, head_dim).transpose(1, 2) # (N, heads, T, head_dim)
-        k = k.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
-        v = v.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
+
+        if kv_cache is None:
+            k = self.k(memory) # (N, S, head_dim * heads)
+            v = self.v(memory) # (N, S, head_dim * heads)
+            k = k.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
+            v = v.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
+            kv_cache = (k, v)
+        else:
+            k, v = kv_cache
 
         #q = rotate(q)
         #k = rotate(k)
@@ -194,7 +208,7 @@ class MultiHeadAttention(nn.Module):
             x = att @ v # (N, heads, T, head_dim)
         x = x.transpose(1, 2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
-        return self.dropout(self.proj(x)), att_entropy
+        return self.dropout(self.proj(x)), att_entropy, kv_cache
 
 
 class Block(nn.Module):
@@ -229,18 +243,30 @@ class Block(nn.Module):
             nn.Dropout(p_drop),
         )
 
-    def forward(self, x, time_mask=None, memory=None, memory_lengths=None, measure_entropy=False):
+    def forward(
+        self, x, time_mask=None,
+        memory=None, memory_lengths=None,
+        measure_entropy=False,
+        kv_cache=BlockKVCache(memory=None, time=None),
+    ):
         x = self.ln_time(x)
 
         if self.mix_memory is not None:
             memory_mask = torch.arange(memory.shape[-2], device=x.device)[None, :] >= memory_lengths[:, None]
-            m, m_ent = self.mix_memory(x, memory, mask=memory_mask[:, None, None, :], measure_entropy=measure_entropy)
+            m, m_ent, memory_kv_cache = self.mix_memory(
+                x,
+                memory,
+                mask=memory_mask[:, None, None, :],
+                measure_entropy=measure_entropy,
+                kv_cache=kv_cache.memory,
+            )
             x = x + m
         else:
             m_ent = torch.tensor(float('-inf'))
+            memory_kv_cache = None
 
-        #t, t_ent = self.mix_time(x, x, mask=time_mask, measure_entropy=measure_entropy)
-        t, t_ent = self.mix_time(x), torch.tensor(float('-inf'))
+        #t, t_ent, time_kv_cache = self.mix_time(x, x, mask=time_mask, measure_entropy=measure_entropy, kv_cache=kv_cache.time)
+        t, t_ent, time_kv_cache = self.mix_time(x), torch.tensor(float('-inf')), None
         x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
-        return x, (m_ent, t_ent)
+        return x, (m_ent, t_ent), kv_cache._replace(memory=memory_kv_cache, time=time_kv_cache)
