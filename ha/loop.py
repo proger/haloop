@@ -248,8 +248,8 @@ class System(nn.Module):
         ali = ali_[:feat_len].cpu().tolist() if ali_ is not None else []
         ref = ref[:ref_len].cpu().tolist()
 
-        hyp1 = self.vocab.decode(hyp)
-        ref1 = self.vocab.decode(ref)
+        hyp1, hyp_words = self.vocab.decode(hyp)
+        ref1, ref_words = self.vocab.decode(ref)
 
         stat |= edit_distance(hyp1, ref1)
         stat['length'] = len(ref1)
@@ -257,8 +257,7 @@ class System(nn.Module):
         stat['ler'] = round(ler, 2)
         label_error = Counter(stat)
 
-        ref_words = ref1.split()
-        word_dist = edit_distance(hyp1.split(), ref_words)
+        word_dist = edit_distance(hyp_words, ref_words)
         word_dist['length'] = len(ref_words)
         wer = word_dist['total'] / word_dist['length']
         stat['wer'] = round(wer, 2)
@@ -267,7 +266,7 @@ class System(nn.Module):
         if self.args.quiet:
             return label_error, word_error
 
-        ali = self.vocab.decode(ali)
+        ali, _ = self.vocab.decode(ali)
 
         if isinstance(ref1, list):
             star = '␣'

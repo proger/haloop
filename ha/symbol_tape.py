@@ -12,7 +12,7 @@ class DictionaryLike(Protocol):
     def encode(self, text: str | bytes | list[int], extend_vocab=False) -> torch.LongTensor:
         ...
 
-    def decode(self, ids: torch.LongTensor) -> str:
+    def decode(self, ids: torch.LongTensor) -> tuple[str, str]:
         ...
 
     def format(self, s: str | bytes) -> str:
@@ -79,9 +79,12 @@ class Vocabulary(DictionaryLike):
 
     def decode(self, ids):
         if isinstance(self.id_to_string[0], bytes):
-            return b''.join([self.id_to_string[id] for id in ids])
+            labels = b''.join([self.id_to_string[id] for id in ids])
+            words = labels.split(b' ')
         else:
-            return ''.join([self.id_to_string[id] for id in ids])
+            labels = ''.join([self.id_to_string[id] for id in ids])
+            words = labels.split(' ')
+        return labels, words
 
     @classmethod
     def bytes(cls, n=256):
@@ -143,10 +146,11 @@ class WordVocabulary(Vocabulary):
         return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text.split()])
 
     def decode(self, ids):
-        return ' '.join([self.id_to_string[id] for id in ids])
+        labels = [self.id_to_string[id] for id in ids]
+        return labels, ''.join(labels).split('▁')
 
     def format(self, s):
-        return s
+        return ' '.join(s)
 
 
 def tokenize_bytes(text_file, vocab, extend_vocab=False, device='cpu'):
