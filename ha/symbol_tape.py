@@ -147,7 +147,7 @@ class WordVocabulary(Vocabulary):
 
     def decode(self, ids):
         labels = [self.id_to_string[id] for id in ids]
-        return labels, ''.join(labels).split('▁')
+        return labels, ''.join(labels).lstrip('▁').split('▁')
 
     def format(self, s):
         return ' '.join(s)
