@@ -11,24 +11,21 @@ BlockKVCache = namedtuple('BlockKVCache', ['memory', 'time'])
 Stats = namedtuple('Stats', ['meme_entropy', 'self_entropy'])
 
 
-def rotate(x, base=10000, interleaved=False):
+def rotate_interleaved(x, *, t0=0, base=10000):
     "rotate query or key embedding as in https://arxiv.org/abs/2104.09864"
     *_, T, C = x.shape
 
-    t = torch.arange(0, T, dtype=torch.float32, device=x.device)[:, None]
+    t = torch.arange(t0, t0+T, dtype=torch.float32, device=x.device)[:, None]
     exp = torch.arange(0, C//2, dtype=torch.float32, device=x.device)[None, :]
     exp = -2 * exp.repeat_interleave(2, -1) / C
 
     sin = torch.sin((base**exp) * t)
     cos = torch.cos((base**exp) * t)
 
-    even, odd = x[..., :, 1::2], x[..., :, 0::2]
+    odd, even = x[..., 0::2], x[..., 1::2]
     x_ = torch.stack([-even, odd], dim=-1).flatten(-2, -1)
 
     x = x * cos + x_ * sin
-    if interleaved == False:
-        even, odd = x[..., 1::2], x[..., 0::2]
-        x = torch.stack([odd, even], dim=-1).mT.flatten(-2, -1)
     return x
 
 
@@ -141,6 +138,7 @@ class Decoder(nn.Module, Decodable):
                     time_mask=causal_mask, memory=features, memory_lengths=input_lengths,
                     measure_entropy=False,
                     kv_cache=kv_cache[i],
+                    t0=t
                 )
             logits = self.lm_head(self.ln_f(y[:, t, :])) # (N, 1, V)
 
@@ -170,7 +168,27 @@ class MultiHeadAttention(nn.Module):
         self.p_drop = p_drop
         self.dropout = nn.Dropout(p_drop)
 
-    def forward(self, x, memory, *, mask=None, measure_entropy=False, kv_cache=None):
+    def init_from_flash_mha_(self, mha):
+        #from flash_attn.modules.mha import MHA
+        step = self.head_dim * self.heads
+        assert mha.Wqkv.weight.shape[0] == step * 3
+        self.q.weight.data = mha.Wqkv.weight.data[0*step:1*step, :]
+        self.k.weight.data = mha.Wqkv.weight.data[1*step:2*step, :]
+        self.v.weight.data = mha.Wqkv.weight.data[2*step:3*step, :]
+        self.proj.weight.data = mha.out_proj.weight.data
+        return self
+
+    def forward(
+        self,
+        x,
+        memory,
+        *,
+        mask=None, # (N, ..., T, S) | None
+        measure_entropy=False,
+        kv_cache=None,
+        t0=0,
+        rope=False,
+    ):
         N, T, _C = x.shape
         N, S, _C = memory.shape
         heads, head_dim = self.heads, self.head_dim
@@ -187,11 +205,15 @@ class MultiHeadAttention(nn.Module):
         else:
             k, v = kv_cache
 
-        #q = rotate(q)
-        #k = rotate(k)
+        if rope:
+            q = rotate_interleaved(q, t0=t0).to(q.dtype)
+            k = rotate_interleaved(k).to(k.dtype)
 
         if not measure_entropy:
-            x = F.scaled_dot_product_attention(q, k, v, attn_mask=~mask, dropout_p=self.p_drop if self.training else 0)
+            if mask is not None:
+                mask = ~mask
+
+            x = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.p_drop if self.training else 0)
 
             att_entropy = torch.tensor(float('-inf'))
         else:
@@ -215,6 +237,9 @@ class Block(nn.Module):
     def __init__(self, head_dim: int, heads: int, p_drop: float, memory=False):
         super().__init__()
 
+        self.heads = heads
+        self.head_dim = head_dim
+
         self.ln_time = nn.LayerNorm(head_dim * heads)
         if False:
             self.mix_time = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
@@ -229,7 +254,8 @@ class Block(nn.Module):
                 dropout=p_drop,
                 causal=memory,
                 rotary_emb_dim=head_dim,
-                use_flash_attn=True
+                use_flash_attn=True,
+                layer_idx=-1,
             )
         if memory:
             self.mix_memory = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
@@ -248,6 +274,7 @@ class Block(nn.Module):
         memory=None, memory_lengths=None,
         measure_entropy=False,
         kv_cache=BlockKVCache(memory=None, time=None),
+        t0=0,
     ):
         x = self.ln_time(x)
 
@@ -259,6 +286,7 @@ class Block(nn.Module):
                 mask=memory_mask[:, None, None, :],
                 measure_entropy=measure_entropy,
                 kv_cache=kv_cache.memory,
+                t0=t0,
             )
             x = x + m
         else:
