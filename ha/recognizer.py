@@ -16,7 +16,8 @@ class Decodable(Protocol):
     def decode(self, features, input_lengths, target_lengths):
         ...
 
-    def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None):
+    def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None,
+                measure_entropy=False, drop_labels=False):
         ...
 
 

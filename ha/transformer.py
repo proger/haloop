@@ -69,6 +69,7 @@ class Decoder(nn.Module, Decodable):
         features, targets, input_lengths=None, target_lengths=None,
         star_penalty=None, # ignored
         measure_entropy=False,
+        drop_labels=None,
     ):
         N, T = targets.shape
 
@@ -91,6 +92,11 @@ class Decoder(nn.Module, Decodable):
         #features = features + sinusoids_like(features)
 
         stats = Stats(meme_entropy=[], self_entropy=[])
+
+        if (drop_labels is None and self.training) or drop_labels:
+            # label dropout
+            keep = torch.empty_like(prompt).bernoulli_(0.9).bool()
+            prompt = torch.where(keep, prompt, torch.ones_like(prompt))
 
         # run all tokens at once
         y = self.wte(prompt) # + self.wpe(torch.arange(T, device=prompt.device))

@@ -84,7 +84,7 @@ class System(nn.Module):
         else:
             return input_lengths
 
-    def forward(self, inputs, targets, input_lengths, target_lengths):
+    def forward(self, inputs, targets, input_lengths, target_lengths, drop_labels=False):
         device = next(self.encoder.parameters()).device
 
         inputs = inputs.to(device) # (N, T, C)
@@ -103,6 +103,7 @@ class System(nn.Module):
                 features, targets, feature_lengths, target_lengths,
                 star_penalty=self.args.star_penalty,
                 measure_entropy=measure_entropy,
+                drop_labels=drop_labels,
             )
             if measure_entropy:
                 for k in stats:
@@ -121,7 +122,7 @@ class System(nn.Module):
 
         self.models.train()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
-            loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
 
             if torch.isnan(loss):
                 log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
@@ -185,7 +186,7 @@ class System(nn.Module):
         hook_handles = register_activation_stat_hooks(self.models)
 
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(loader):
-            loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths)
+            loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=False)
             if i == 0:
                 print_activation_stat_hooks(self.models)
                 for hook_handle in hook_handles:
