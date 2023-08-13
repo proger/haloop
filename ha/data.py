@@ -29,7 +29,34 @@ class LabelFile(torch.utils.data.Dataset):
         resample = self.resample.get(sr)
         if not resample:
             raise ValueError(f'unsupported sample rate {sr}, add a resampler to LabelFile.resample')
-        return index, resample(wav), self.ark[self.filenames[index]]
+        wav = resample(wav)
+        return index, wav, self.ark[self.filenames[index]]
+
+
+class RandomizedPairsDataset(torch.utils.data.Dataset):
+    "A dataset that concatenates random pairs of utterances from another dataset"
+
+    def __init__(self, dataset, seed=0):
+        super().__init__()
+        self.dataset = dataset
+        generator = torch.Generator().manual_seed(seed)
+        self.pair_permutation = torch.randperm(len(dataset), generator=generator)
+        self.silences = torch.randint(160, 4000, (len(dataset),), generator=generator)
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def utt_id(self, index):
+        return self.dataset.utt_id(index)
+
+    def __getitem__(self, index):
+        pair_index = self.pair_permutation[index]
+        _, wav1, text1 = self.dataset[index]
+        _, wav2, text2 = self.dataset[pair_index]
+        silence = torch.zeros(1, self.silences[index], dtype=wav1.dtype)
+        wav = torch.cat([wav1, silence, wav2], dim=1)
+        text = f'{text1} {text2}'
+        return index, wav, text
 
 
 class LibriSpeech(torch.utils.data.Dataset):
@@ -167,6 +194,8 @@ def make_dataset(s):
     match s.split(':', maxsplit=1):
         case ['labels', label_file]: # over filename
             return LabelFile(Path(label_file))
+        case ['randpairs', subset]:
+            return RandomizedPairsDataset(make_dataset(subset))
         case ['head', subset]: # any
             return torch.utils.data.Subset(make_dataset(subset), range(16))
         case ['wdrop.4', subset]: # any
@@ -220,11 +249,24 @@ def concat_datasets(s):
 
 
 if __name__ == '__main__':
-    import sys
-    for i, f, t in make_dataset(sys.argv[1]):
-        print(i, f.mean(dim=0), f.std(dim=0), f.shape, t)
-        break
-    m,s = torch.zeros(80), torch.zeros(80)
-    frames = torch.cat([f for i, f, t in make_dataset(sys.argv[1])], dim=0)
-    print(f.mean(dim=0))
-    print(f.std(dim=0))
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--count', choices=['labels', 'frames'], default='labels')
+    parser.add_argument('datasets')
+    args = parser.parse_args()
+
+    dataset = concat_datasets(args.datasets)
+
+    match args.count:
+        case 'labels':
+            stat = [len(text.split()) for index, frames, text in dataset]
+        case 'frames':
+            stat = [frames.shape[0] for index, frames, text in dataset]
+
+    unique_items, counts = torch.unique(torch.tensor(stat), sorted=True, return_counts=True)
+    max_count = counts.max()
+
+    for u, c in zip(unique_items.tolist(), counts.tolist()):
+        print(u, c, '▎' * (c * 50 // max_count), sep='\t')
+
