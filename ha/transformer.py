@@ -87,7 +87,7 @@ class Decoder(nn.Module, Decodable):
         stx, etx = 2, 3
         prompt = F.pad(targets, (1, 0), value=stx) # (N, T+1)
         targets = F.pad(targets, (0, 1), value=0) # (N, T+1)
-        targets[torch.arange(N), target_lengths] = etx
+        targets[torch.arange(N, device=targets.device), target_lengths] = torch.LongTensor([etx]).to(targets.device)
         T = T + 1
 
         # add positional encoding to features
@@ -113,7 +113,7 @@ class Decoder(nn.Module, Decodable):
 
         logits = self.lm_head(self.ln_f(y)) # (N, T, V)
 
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0, reduction='mean')
         return loss, stats._asdict()
 
     def decode(self, features, input_lengths, target_lengths):
@@ -148,7 +148,7 @@ class Decoder(nn.Module, Decodable):
                     kv_cache=kv_cache[i],
                     t0=t
                 )
-            logits = self.lm_head(self.ln_f(y[:, t, :])) # (N, 1, V)
+            logits = self.lm_head(self.ln_f(y[:, -1, :])) # (N, 1, V)
 
             # ignore output on completed sequences
             completed = prompt[:, t] == etx
@@ -257,13 +257,13 @@ class MultiHeadAttention(nn.Module):
         heads, head_dim = self.heads, self.head_dim
 
         q = self.q(x) # (N, T, head_dim * heads)
-        q = q.view(N, T, heads, head_dim).transpose(1, 2) # (N, heads, T, head_dim)
+        q = q.view(N, T, heads, head_dim).transpose(-3, -2) # (N, heads, T, head_dim)
 
         if kv_cache is None:
             k = self.k(memory) # (N, S, head_dim * heads)
             v = self.v(memory) # (N, S, head_dim * heads)
-            k = k.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
-            v = v.view(N, S, heads, head_dim).transpose(1, 2) # (N, heads, S, head_dim)
+            k = k.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
+            v = v.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
             kv_cache = (k, v)
         else:
             k, v = kv_cache
@@ -294,7 +294,7 @@ class MultiHeadAttention(nn.Module):
             att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
 
             x = att @ v # (N, heads, T, head_dim)
-        x = x.transpose(1, 2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
+        x = x.transpose(-3, -2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
         return self.dropout(self.proj(x)), att_entropy, kv_cache
 
