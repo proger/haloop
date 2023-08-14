@@ -196,10 +196,11 @@ class AudioEncoder(nn.Module):
         return self.conv.subsampled_lengths(input_lengths)
 
     def forward(self, x, input_lengths, measure_entropy=False):
-        x = self.drop(x)
         x = x.mT
         x, input_lengths = self.conv(x, input_lengths)
         x = x.mT
+
+        x = self.drop(x)
 
         stats = Stats(meme_entropy=[], self_entropy=[])
 
