@@ -346,13 +346,12 @@ class Block(nn.Module):
         kv_cache=BlockKVCache(memory=None, time=None),
         t0=0,
     ):
-        x0 = x
-        x = self.ln_time(x)
+        x_norm = self.ln_time(x)
 
         if self.mix_memory is not None:
             memory_mask = torch.arange(memory.shape[-2], device=x.device)[None, :] >= memory_lengths[:, None]
             m, m_ent, memory_kv_cache = self.mix_memory(
-                x,
+                x_norm,
                 memory,
                 mask=memory_mask[:, None, None, :],
                 measure_entropy=measure_entropy,
@@ -364,8 +363,8 @@ class Block(nn.Module):
             m_ent = torch.tensor(float('-inf'))
             memory_kv_cache = None
 
-        t, t_ent, time_kv_cache = self.mix_time(x, x, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache=kv_cache.time, t0=t0, rope=True)
+        t, t_ent, time_kv_cache = self.mix_time(x_norm, x_norm, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache=kv_cache.time, t0=t0, rope=True)
 
-        x = x0 + t
+        x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
         return x, (m_ent, t_ent), kv_cache._replace(memory=memory_kv_cache, time=time_kv_cache)
