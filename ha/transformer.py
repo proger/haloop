@@ -41,8 +41,9 @@ class CTCAttentionDecoder(nn.Module, Decodable):
         features, targets, input_lengths=None, target_lengths=None,
         star_penalty=None,
         measure_entropy=False,
+        drop_labels=False,
     ):
-        decoder_loss, decoder_stats = self.decoder(features, targets, input_lengths, target_lengths, star_penalty, measure_entropy)
+        decoder_loss, decoder_stats = self.decoder(features, targets, input_lengths, target_lengths, star_penalty, measure_entropy, drop_labels)
         recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
         return decoder_loss + 0.3*recognizer_loss, {**decoder_stats, **recognizer_stats}
 
