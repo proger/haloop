@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .attention import LayerNorm, Block
+from .conv import DWConv1d
 
 
 def sinusoids(length, channels, max_timescale=10000):
@@ -13,25 +14,6 @@ def sinusoids(length, channels, max_timescale=10000):
     inv_timescales = torch.exp(-math.log(max_timescale) * scales)
     scaled_time = torch.arange(length)[:, None] * inv_timescales[None, :]
     return torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1)
-
-
-class DWConv1d(nn.Module):
-    "Depthwise separable convolution"
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, dilation=1, bias=True):
-        super().__init__()
-        self.kernel_size = kernel_size,
-        self.stride = stride,
-        self.padding = padding,
-        self.dilation = dilation,
-        self.bias = bias,
-        self.depthwise = nn.Conv1d(in_channels, in_channels,
-                                   kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation,
-                                   groups=in_channels,
-                                   bias=bias)
-        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=bias)
-
-    def forward(self, x):
-        return self.pointwise(self.depthwise(x))
 
 
 class StridingAudioEncoder(nn.Module):
@@ -53,7 +35,6 @@ class StridingAudioEncoder(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
 
-
     def subsampled_lengths(self, input_lengths):
         # https://github.com/vdumoulin/conv_arithmetic
         o = input_lengths
@@ -63,7 +44,7 @@ class StridingAudioEncoder(nn.Module):
             o = torch.floor(o / s + 1)
         return o.int()
 
-    def forward(self, x, measure_entropy=False):
+    def forward(self, x, input_lengths, measure_entropy=False):
         x = x.mT
         for conv in self.conv:
             x = F.gelu(conv(x))
@@ -77,7 +58,7 @@ class StridingAudioEncoder(nn.Module):
             x, _att_entropy, _present = block(x, past=None, measure_entropy=measure_entropy)
         x = self.transformer.ln_f(x)
 
-        return x
+        return x, self.subsampled_lengths(input_lengths), {}
 
 
 class AudioEncoder(nn.Module):
@@ -116,7 +97,7 @@ class AudioEncoder(nn.Module):
         o = torch.floor(o / s + 1)
         return o.int()
 
-    def forward(self, x, measure_entropy=False):
+    def forward(self, x, input_lengths, measure_entropy=False):
         x = x.mT
         x = F.gelu(self.conv_pre(x))
         x = F.gelu(self.conv_subsample(x))
@@ -134,7 +115,7 @@ class AudioEncoder(nn.Module):
             x, _att_entropy, _present = block(x, past=None, measure_entropy=measure_entropy)
         x = self.transformer.ln_f(x)
 
-        return x
+        return x, self.subsampled_lengths(input_lengths), {}
 
 
 if __name__ == '__main__':

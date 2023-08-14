@@ -31,7 +31,7 @@ def test_mha_with_flash_attn(input_tensor):
     ).cuda().to(torch.float16).init_from_flash_mha_(mha)
 
     assert torch.allclose(
-        att(input_tensor, input_tensor, measure_entropy=True, apply_rotations=False)[0],
+        att(input_tensor, input_tensor, measure_entropy=True)[0],
         mha(input_tensor),
         atol=1e-3
     )

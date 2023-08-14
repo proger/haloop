@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import math
 
 from .recognizer import Decodable, TemporalClassifier
+from .attention import LayerNorm
+from .conv import ConvEncoder
 from .sinusoids import sinusoids_like
 
 BlockKVCache = namedtuple('BlockKVCache', ['memory', 'time'])
@@ -12,7 +14,7 @@ Stats = namedtuple('Stats', ['meme_entropy', 'self_entropy'])
 
 
 def rotate_interleaved(x, *, t0=0, base=10000):
-    "rotate query or key embedding as in https://arxiv.org/abs/2104.09864"
+    "rotate query or key embedding as in https://arxiv.org/abs/2104.09864 GPT-J style"
     *_, T, C = x.shape
 
     t = torch.arange(t0, t0+T, dtype=torch.float32, device=x.device)[:, None]
@@ -31,9 +33,9 @@ def rotate_interleaved(x, *, t0=0, base=10000):
 
 class CTCAttentionDecoder(nn.Module, Decodable):
     "CTC loss on the encoder, CE loss on the decoder"
-    def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
+    def __init__(self, *, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
         super().__init__()
-        self.decoder = Decoder(context=context, vocab=vocab, head_dim=head_dim, heads=heads, p_drop=p_drop, layers=layers)
+        self.decoder = Decoder(vocab=vocab, head_dim=head_dim, heads=heads, p_drop=p_drop, layers=layers)
         self.recognizer = TemporalClassifier(feat_dim=head_dim * heads, vocab_size=vocab)
 
     def forward(
@@ -52,17 +54,16 @@ class CTCAttentionDecoder(nn.Module, Decodable):
 
 
 class Decoder(nn.Module, Decodable):
-    def __init__(self, *, context: int, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
+    def __init__(self, *, vocab: int, head_dim: int, heads: int, p_drop: float, layers: int):
         super().__init__()
 
-        #self.wpe = nn.Embedding(context, head_dim * heads)
         self.wte = nn.Embedding(vocab, head_dim * heads)
 
         self.h = nn.ModuleList([
             Block(head_dim=head_dim, heads=heads, p_drop=p_drop, memory=True)
             for _ in range(layers)
         ])
-        self.ln_f = nn.LayerNorm(head_dim * heads)
+        self.ln_f = LayerNorm(head_dim * heads, bias=False)
         self.lm_head = nn.Linear(head_dim * heads, vocab, bias=False)
 
     def forward(
@@ -101,11 +102,10 @@ class Decoder(nn.Module, Decodable):
 
         # run all tokens at once
         y = self.wte(prompt) # + self.wpe(torch.arange(T, device=prompt.device))
-        causal_mask = torch.triu(y.new_ones(T, T), diagonal=1).bool()
         for block in self.h:
             y, (m_ent, t_ent), _ = block(
                 y,
-                time_mask=causal_mask, memory=features, memory_lengths=input_lengths,
+                causal=True, memory=features, memory_lengths=input_lengths,
                 measure_entropy=measure_entropy
             )
             stats.meme_entropy.append(m_ent)
@@ -136,13 +136,14 @@ class Decoder(nn.Module, Decodable):
         for t in range(target_lengths.max().item()+1):
             # run one token at a time
             x_ = self.wte(prompt[:, [t]]) #+ self.wpe(torch.arange(t, t+1, device=prompt.device))
-            y = x = torch.cat([x, x_], dim=1) # (N, T, C)
 
-            causal_mask = torch.triu(x.new_ones(t+1, t+1), diagonal=1).bool()
+            y = x = torch.cat([x, x_], dim=1) # (N, T, C)
+            #y = x_
+
             for i, block in enumerate(self.h):
                 y, _, kv_cache[i] = block(
                     y,
-                    time_mask=causal_mask, memory=features, memory_lengths=input_lengths,
+                    causal=True, memory=features, memory_lengths=input_lengths,
                     measure_entropy=False,
                     kv_cache=kv_cache[i],
                     t0=t
@@ -160,6 +161,60 @@ class Decoder(nn.Module, Decodable):
         alignments = [None]*N
         return outputs, alignments
         
+
+class AudioEncoder(nn.Module):
+    def __init__(
+        self,
+        *,
+        head_dim: int = 64,
+        heads: int = 12,
+        p_drop: float = 0.2,
+        layers: int = 12,
+        input_dim: int = 80,
+        conv_dim: int = 256,
+        conv_strides: tuple[int, ...] = (2,2,2)
+    ):
+        super().__init__()
+
+        self.head_dim = head_dim
+        self.heads = heads
+
+        self.conv = ConvEncoder(
+            input_dim=input_dim,
+            hidden_dim=conv_dim,
+            output_dim=head_dim*heads,
+            strides=conv_strides
+        )
+        self.drop = nn.Dropout(p_drop)
+        self.h = nn.ModuleList([
+            Block(head_dim=head_dim, heads=heads, p_drop=p_drop)
+            for _ in range(layers)
+        ])
+        self.ln_f = LayerNorm(head_dim * heads, bias=False)
+
+    def subsampled_lengths(self, input_lengths):
+        return self.conv.subsampled_lengths(input_lengths)
+
+    def forward(self, x, input_lengths, measure_entropy=False):
+        x = self.drop(x)
+        x = x.mT
+        x, input_lengths = self.conv(x, input_lengths)
+        x = x.mT
+
+        stats = Stats(meme_entropy=[], self_entropy=[])
+
+        time_mask = (torch.arange(x.size(-2), device=x.device)[None, :] >= input_lengths[:, None])[:, None, None, :]
+        for block in self.h:
+            x, (m_ent, t_ent), _ = block(
+                x,
+                time_mask=time_mask,
+                measure_entropy=measure_entropy
+            )
+            stats.meme_entropy.append(m_ent)
+            stats.self_entropy.append(t_ent)
+
+        x = self.ln_f(x)
+        return x, input_lengths, stats._asdict()
 
 
 class MultiHeadAttention(nn.Module):
@@ -191,6 +246,7 @@ class MultiHeadAttention(nn.Module):
         memory,
         *,
         mask=None, # (N, ..., T, S) | None
+        causal=False,
         measure_entropy=False,
         kv_cache=None,
         t0=0,
@@ -219,8 +275,11 @@ class MultiHeadAttention(nn.Module):
         if not measure_entropy:
             if mask is not None:
                 mask = ~mask
+                is_causal = False
+            else:
+                is_causal = causal
 
-            x = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.p_drop if self.training else 0)
+            x = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=is_causal, dropout_p=self.p_drop if self.training else 0)
 
             att_entropy = torch.tensor(float('-inf'))
         else:
@@ -247,8 +306,8 @@ class Block(nn.Module):
         self.heads = heads
         self.head_dim = head_dim
 
-        self.ln_time = nn.LayerNorm(head_dim * heads)
-        if False:
+        self.ln_time = LayerNorm(head_dim * heads, bias=False)
+        if True:
             self.mix_time = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
         else:
             from flash_attn.modules.mha import MHA
@@ -268,7 +327,7 @@ class Block(nn.Module):
             self.mix_memory = MultiHeadAttention(head_dim=head_dim, heads=heads, p_drop=p_drop)
         else:
             self.mix_memory = None
-        self.ln_chan = nn.LayerNorm(head_dim * heads)
+        self.ln_chan = LayerNorm(head_dim * heads, bias=False)
         self.mix_chan = nn.Sequential(
             nn.Linear(head_dim * heads, head_dim * heads * 4, bias=False),
             nn.GELU(),
@@ -277,7 +336,7 @@ class Block(nn.Module):
         )
 
     def forward(
-        self, x, time_mask=None,
+        self, x, time_mask=None, causal=False,
         memory=None, memory_lengths=None,
         measure_entropy=False,
         kv_cache=BlockKVCache(memory=None, time=None),
@@ -300,8 +359,12 @@ class Block(nn.Module):
             m_ent = torch.tensor(float('-inf'))
             memory_kv_cache = None
 
-        #t, t_ent, time_kv_cache = self.mix_time(x, x, mask=time_mask, measure_entropy=measure_entropy, kv_cache=kv_cache.time)
-        t, t_ent, time_kv_cache = self.mix_time(x), torch.tensor(float('-inf')), None
+
+        if True:
+            t, t_ent, time_kv_cache = self.mix_time(x, x, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache=kv_cache.time, t0=t0, rope=True)
+        else:
+            t, t_ent, time_kv_cache = self.mix_time(x), torch.tensor(float('-inf')), None
+
         x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
         return x, (m_ent, t_ent), kv_cache._replace(memory=memory_kv_cache, time=time_kv_cache)

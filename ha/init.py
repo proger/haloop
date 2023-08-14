@@ -179,7 +179,6 @@ def create_model(arch: str, compile: bool = True):
             from ha.transformer import Decoder
             head_dim = config.n_embd // config.n_head
             decoder = Decoder(
-                context=config.block_size,
                 vocab=config.vocab_size,
                 head_dim=head_dim,
                 heads=config.n_head,
@@ -192,7 +191,7 @@ def create_model(arch: str, compile: bool = True):
             encoder = StridingAudioEncoder(config)
             from ha.transformer import CTCAttentionDecoder
             head_dim = config.n_embd // config.n_head
-            decoder = CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size,
+            decoder = CTCAttentionDecoder(vocab=config.vocab_size,
                                           head_dim=head_dim, heads=config.n_head,
                                           p_drop=config.dropout, layers=4)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
@@ -202,7 +201,7 @@ def create_model(arch: str, compile: bool = True):
             config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
             encoder = StridingAudioEncoder(config)
             head_dim = config.n_embd // config.n_head
-            decoder = transformer.CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size,
+            decoder = transformer.CTCAttentionDecoder(vocab=config.vocab_size,
                                                       head_dim=head_dim, heads=config.n_head,
                                                       p_drop=config.dropout, layers=6)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
@@ -210,28 +209,27 @@ def create_model(arch: str, compile: bool = True):
             config = StridingAudioEncoderConfig(dropout=0.2, n_layer=6, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
             encoder = StridingAudioEncoder(config)
             head_dim = config.n_embd // config.n_head
-            decoder = transformer.Decoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
+            decoder = transformer.Decoder(vocab=config.vocab_size, head_dim=head_dim,
                                           heads=config.n_head, p_drop=config.dropout, layers=6)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
         case ['e12ctc-d12', vocab_size]:
             config = StridingAudioEncoderConfig(dropout=0.2, n_layer=12, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
             encoder = StridingAudioEncoder(config)
             head_dim = config.n_embd // config.n_head
-            decoder = transformer.CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
+            decoder = transformer.CTCAttentionDecoder(vocab=config.vocab_size, head_dim=head_dim,
                                           heads=config.n_head, p_drop=config.dropout, layers=12)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
-        case ['s222e12ctc-d12', vocab_size]:
-            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=12, n_head=8, n_embd=512, conv_strides=(2,2,2), vocab_size=int(vocab_size))
-            encoder = StridingAudioEncoder(config)
-            head_dim = config.n_embd // config.n_head
-            decoder = transformer.CTCAttentionDecoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
-                                          heads=config.n_head, p_drop=config.dropout, layers=12)
+        case ['transformer', vocab_size]:
+            encoder = transformer.AudioEncoder(head_dim=64, heads=8, layers=12, p_drop=0.2)
+            decoder = transformer.CTCAttentionDecoder(
+                vocab=int(vocab_size), head_dim=64,
+                heads=8, p_drop=0.2, layers=12)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
         case ['e12d12', vocab_size]:
             config = StridingAudioEncoderConfig(dropout=0.2, n_layer=12, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
             encoder = StridingAudioEncoder(config)
             head_dim = config.n_embd // config.n_head
-            decoder = transformer.Decoder(context=config.block_size, vocab=config.vocab_size, head_dim=head_dim,
+            decoder = transformer.Decoder(vocab=config.vocab_size, head_dim=head_dim,
                                           heads=config.n_head, p_drop=config.dropout, layers=12)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
 

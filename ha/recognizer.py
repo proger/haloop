@@ -16,8 +16,16 @@ class Decodable(Protocol):
     def decode(self, features, input_lengths, target_lengths):
         ...
 
-    def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None,
-                measure_entropy=False, drop_labels=False):
+    def forward(
+        self,
+        features: torch.Tensor, # (N, T, C)
+        targets: torch.Tensor, # (N, S)
+        input_lengths: torch.LongTensor | None = None, # (N,)
+        target_lengths: torch.LongTensor | None = None, # (N,)
+        star_penalty: float | None = None,
+        measure_entropy: bool = False,
+        drop_labels : bool = False
+    ) -> tuple[torch.Tensor, dict]:
         ...
 
 

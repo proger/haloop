@@ -17,13 +17,13 @@ class Encoder(nn.Module):
         o = torch.floor(o / s + 1)
         return o.int()
 
-    def forward(self, inputs, input_lengths):
+    def forward(self, inputs, input_lengths, measure_entropy=False):
         x = inputs
         x = self.subsample(x.mT).mT
         x = x.relu()
         x = self.dropout(x)
         x, _ = self.lstm(x)
-        return x.relu()
+        return x.relu(), self.subsampled_lengths(input_lengths), {}
 
 
 

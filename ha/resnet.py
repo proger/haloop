@@ -121,7 +121,9 @@ class FixupResNet(nn.Module):
 
 
     def forward(self,
-                x # (N, T, C)
+                x, # (N, T, C)
+                input_lengths, # (N)
+                measure_entropy=False,
                 ):
 
         x = x.unsqueeze(1).mT # N T C -> N 1 C T (@NCHW)
@@ -138,7 +140,7 @@ class FixupResNet(nn.Module):
         x = x.view(x.size(0), -1, x.size(3)) # N C H W -> N C T
         x = x.mT # N C T -> N T C
 
-        return x
+        return x, self.subsampled_lengths(input_lengths), {}
 
 
     def subsampled_lengths(self, input_lengths):

@@ -55,6 +55,7 @@ class System(nn.Module):
     def load_state_dict(self, checkpoint):
         encoder = {}
         for key in checkpoint['encoder']:
+            # convert gpt-like attention to flash MHA
             if 'attn.c_attn.weight' in key:
                 l, _, _ = key.rsplit('.', maxsplit=2)
                 encoder[l + '.Wqkv.weight'] = checkpoint['encoder'][key]
@@ -64,8 +65,27 @@ class System(nn.Module):
             else:
                 encoder[key] = checkpoint['encoder'][key]
 
-        self.encoder.load_state_dict(encoder, strict=False)
-        self.recognizer.load_state_dict(checkpoint['recognizer'])
+        if False:
+            # convert from flash MHA to my implementation
+            recognizer = {}
+            for key in checkpoint['recognizer']:
+                if 'rotary_emb.inv_freq' in key:
+                    continue
+                elif 'mix_time.Wqkv.weight' in key:
+                    l, _, _ = key.rsplit('.', maxsplit=2)
+                    step = checkpoint['recognizer'][key].shape[0] // 3
+                    recognizer[l + '.q.weight'] = checkpoint['recognizer'][key][0*step:1*step, :]
+                    recognizer[l + '.k.weight'] = checkpoint['recognizer'][key][1*step:2*step, :]
+                    recognizer[l + '.v.weight'] = checkpoint['recognizer'][key][2*step:3*step, :]
+                elif 'mix_time.out_proj.weight' in key:
+                    l, _, _ = key.rsplit('.', maxsplit=2)
+                    recognizer[l + '.proj.weight'] = checkpoint['recognizer'][key]
+                else:
+                    recognizer[key] = checkpoint['recognizer'][key]
+        else:
+            recognizer = checkpoint['recognizer']
+
+        self.recognizer.load_state_dict(recognizer)
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
 
@@ -78,12 +98,6 @@ class System(nn.Module):
             'loop_args': self.args,
         } | extra
 
-    def subsampled_lengths(self, input_lengths):
-        if hasattr(self.encoder, 'subsampled_lengths'):
-            return self.encoder.subsampled_lengths(input_lengths)
-        else:
-            return input_lengths
-
     def forward(self, inputs, targets, input_lengths, target_lengths, drop_labels=False):
         device = next(self.encoder.parameters()).device
 
@@ -94,11 +108,13 @@ class System(nn.Module):
 
         #log(inputs, targets) # works best with --batch-size 1
 
-        feature_lengths = self.subsampled_lengths(input_lengths)
         measure_entropy = self.args.entropy and not self.training
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
-            features = self.encoder(inputs, input_lengths)
+            features, feature_lengths, stats1 = self.encoder(
+                inputs, input_lengths,
+                measure_entropy=measure_entropy
+            )
             loss, stats = self.recognizer(
                 features, targets, feature_lengths, target_lengths,
                 star_penalty=self.args.star_penalty,
@@ -106,8 +122,10 @@ class System(nn.Module):
                 drop_labels=drop_labels,
             )
             if measure_entropy:
+                for k in stats1:
+                    print('encoder', k, torch.stack(stats1[k]))
                 for k in stats:
-                    print(k, torch.stack(stats[k]))
+                    print('recognizer', k, torch.stack(stats[k]))
 
         return loss, features, feature_lengths
 
@@ -299,7 +317,7 @@ def make_parser():
     parser = argparse.ArgumentParser(formatter_class=Formatter)
     parser.add_argument('--init', type=Path, nargs='+', help="Path to checkpoint(s) to initialize from")
     parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
-    parser.add_argument('--arch', type=str, default='lstm:128', help=create_model.__doc__)
+    parser.add_argument('--arch', type=str, default='transformer:512', help=create_model.__doc__)
     parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|path/to/words.txt")
     parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
     parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
@@ -309,9 +327,9 @@ def make_parser():
     parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
-    parser.add_argument('--batch-size', type=int, default=16, help="Batch size")
+    parser.add_argument('--batch-size', type=int, default=48, help="Batch size")
     parser.add_argument('--accumulate', type=int, default=1, help="Gradient accumulation steps")
-    parser.add_argument('--seed', type=int, default=3407, help="Initial random seed")
+    parser.add_argument('--seed', type=int, default=42, help="Initial random seed")
     parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
     parser.add_argument('--anomaly', action='store_true', help="Detect NaN/Inf during training")
 
