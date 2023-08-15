@@ -218,7 +218,7 @@ class System(nn.Module):
 
             for attempt in range(attempts):
                 with torch.autocast(device_type='cuda', dtype=torch.float16):
-                    hypotheses, alignments, scores = self.recognizer.decode(features, feature_lengths, target_lengths)
+                    hypotheses, _, alignments, scores = self.recognizer.decode(features, feature_lengths, target_lengths)
 
                 valid_loss += loss.item()
 

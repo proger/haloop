@@ -169,7 +169,7 @@ class Decoder(nn.Module, Decodable):
 
         outputs = torch.nested.nested_tensor([p[1:l] for p, l in zip(prompt, output_lengths)])
         alignments = [None]*N
-        return outputs, alignments, logits
+        return outputs, output_lengths, alignments, logits
         
 
 class AudioEncoder(nn.Module):

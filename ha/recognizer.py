@@ -18,7 +18,7 @@ class Decodable(Protocol):
         features: torch.Tensor, # (N, T, C)
         input_lengths: torch.LongTensor | None = None, # (N,)
         target_lengths: torch.LongTensor | None = None, # (N,)
-    ) -> tuple[torch.Tensor, list, torch.Tensor]: # sequences, alignments, scores
+    ) -> tuple[torch.Tensor, torch.Tensor, list, torch.Tensor]: # sequences, lengths, alignments, scores
         ...
 
     def forward(
@@ -53,9 +53,10 @@ class TemporalClassifier(nn.Module, Decodable):
             [i for i in torch.unique_consecutive(alignment) if i]
             for alignment in alignments # greedy
         ])
+        output_lengths = torch.tensor([len(hypothesis) for hypothesis in hypotheses])
 
         #decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq) # FIXME: speed it up
-        return hypotheses, alignments, scores
+        return hypotheses, output_lengths, alignments, scores
 
     def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None, measure_entropy=False):
         if input_lengths is None:
