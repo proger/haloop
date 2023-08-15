@@ -39,13 +39,12 @@ class Collator:
 
 
 class System(nn.Module):
-    def __init__(self, args, models):
+    def __init__(self, args, encoder, recognizer: Decodable):
         super().__init__()
         self.args = args
 
-        self.models = models
-        self.encoder = models['encoder']
-        self.recognizer: Decodable = models['recognizer']
+        self.encoder = encoder
+        self.recognizer = recognizer
         self.vocab = symbol_tape.make_vocab(args.vocab)
 
         self.optimizer = configure_optimizers(self, args, device_type='cuda', decay_lm_head=False)
@@ -142,7 +141,7 @@ class System(nn.Module):
         t0 = time.time()
         local_step, accumulate = 0, 0
 
-        self.models.train()
+        self.train()
         for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
             loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
 
@@ -189,7 +188,7 @@ class System(nn.Module):
 
             if local_step % self.args.evaluate_every == 0:
                 self.evaluate(epoch, valid_loader, attempts=1)
-                self.models.train()
+                self.train()
 
         return global_step
 
@@ -200,17 +199,17 @@ class System(nn.Module):
         word_errors = Counter()
 
         if attempts > 1:
-            self.models.train()
+            self.train()
             est_word_errors = Counter()
         else:
-            self.models.eval()
+            self.eval()
 
-        hook_handles = register_activation_stat_hooks(self.models)
+        hook_handles = register_activation_stat_hooks(self)
 
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(loader):
             loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=False)
             if i == 0:
-                #print_activation_stat_hooks(self.models)
+                #print_activation_stat_hooks(self)
                 for hook_handle in hook_handles:
                     hook_handle.remove()
 
@@ -361,7 +360,7 @@ def main():
     torch.manual_seed(args.seed)
 
     models = create_model(args.arch, compile=False).to(args.device)
-    system = System(args, models)
+    system = System(args, **models)
 
     if args.eval:
         valid_loader = torch.utils.data.DataLoader(
