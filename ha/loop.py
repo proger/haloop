@@ -210,7 +210,7 @@ class System(nn.Module):
         for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(loader):
             loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=False)
             if i == 0:
-                print_activation_stat_hooks(self.models)
+                #print_activation_stat_hooks(self.models)
                 for hook_handle in hook_handles:
                     hook_handle.remove()
 
