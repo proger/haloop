@@ -53,17 +53,20 @@ class System(nn.Module):
         self.lr = LR(args)
 
     def load_state_dict(self, checkpoint):
-        encoder = {}
-        for key in checkpoint['encoder']:
-            # convert gpt-like attention to flash MHA
-            if 'attn.c_attn.weight' in key:
-                l, _, _ = key.rsplit('.', maxsplit=2)
-                encoder[l + '.Wqkv.weight'] = checkpoint['encoder'][key]
-            elif 'attn.c_proj.weight' in key:
-                l, _, _ = key.rsplit('.', maxsplit=2)
-                encoder[l + '.out_proj.weight'] = checkpoint['encoder'][key]
-            else:
-                encoder[key] = checkpoint['encoder'][key]
+        if False:
+            encoder = {}
+            for key in checkpoint['encoder']:
+                # convert gpt-like attention to flash MHA
+                if 'attn.c_attn.weight' in key:
+                    l, _, _ = key.rsplit('.', maxsplit=2)
+                    encoder[l + '.Wqkv.weight'] = checkpoint['encoder'][key]
+                elif 'attn.c_proj.weight' in key:
+                    l, _, _ = key.rsplit('.', maxsplit=2)
+                    encoder[l + '.out_proj.weight'] = checkpoint['encoder'][key]
+                else:
+                    encoder[key] = checkpoint['encoder'][key]
+        else:
+            encoder = checkpoint['encoder']
 
         if False:
             # convert from flash MHA to my implementation
@@ -85,6 +88,7 @@ class System(nn.Module):
         else:
             recognizer = checkpoint['recognizer']
 
+        self.encoder.load_state_dict(encoder)
         self.recognizer.load_state_dict(recognizer)
         self.scaler.load_state_dict(checkpoint['scaler'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
