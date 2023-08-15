@@ -100,7 +100,7 @@ class Decoder(nn.Module, Decodable):
         # run all tokens at once
         y = self.wte(prompt)
         for block in self.h:
-            y, (m_ent, t_ent), _ = block(
+            y, (m_ent, t_ent) = block(
                 y,
                 causal=True, memory=features, memory_lengths=input_lengths,
                 measure_entropy=measure_entropy
@@ -132,8 +132,7 @@ class Decoder(nn.Module, Decodable):
             memory=features.new_zeros((L, 2, N, heads, S, head_dim), dtype=torch.float16),
             time=features.new_zeros((L, 2, N, heads, T, head_dim), dtype=torch.float16),
         )
-        memory_empty = torch.ones((N,), dtype=torch.bool, device=features.device)
-
+        memory_empty = prompt.new_ones((N,), dtype=torch.bool)
         alive = prompt.new_ones((N,), dtype=torch.bool)
 
         for t in range(T):
@@ -147,7 +146,7 @@ class Decoder(nn.Module, Decodable):
             y = self.wte(input)
 
             for layer, block in enumerate(self.h):
-                y, _, new_cache = block(
+                y, _ = block(
                     y,
                     causal=True, memory=features[alive], memory_lengths=input_lengths[alive],
                     measure_entropy=False,
@@ -157,7 +156,6 @@ class Decoder(nn.Module, Decodable):
                     ),
                     t0=t,
                 )
-                assert kv_cache.memory[0].untyped_storage().data_ptr()  == new_cache.memory[0].untyped_storage().data_ptr()
 
             logits = self.lm_head(self.ln_f(y[:, -1, :])) # (N, V)
 
@@ -219,7 +217,7 @@ class AudioEncoder(nn.Module):
         #time_mask = None # ????
 
         for block in self.h:
-            x, (m_ent, t_ent), _ = block(
+            x, (m_ent, t_ent) = block(
                 x,
                 time_mask=time_mask,
                 measure_entropy=measure_entropy
@@ -342,7 +340,7 @@ class MultiHeadAttention(nn.Module):
             x = att @ v # (N, heads, T, head_dim)
         x = x.transpose(-3, -2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
-        return self.dropout(self.proj(x)), att_entropy, kv_cache_parts
+        return self.dropout(self.proj(x)), att_entropy
 
 
 class Block(nn.Module):
@@ -392,7 +390,7 @@ class Block(nn.Module):
 
         if self.mix_memory is not None:
             memory_mask = torch.arange(memory.shape[-2], device=x.device)[None, :] >= memory_lengths[:, None]
-            m, m_ent, memory_cache = self.mix_memory(
+            m, m_ent = self.mix_memory(
                 x_norm,
                 memory,
                 mask=memory_mask[:, None, None, :],
@@ -403,10 +401,9 @@ class Block(nn.Module):
             x = x + m
         else:
             m_ent = torch.tensor(float('-inf'))
-            memory_cache = None
 
-        t, t_ent, time_cache = self.mix_time(x_norm, x_norm, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache_parts=kv_cache_parts.time, t0=t0, rope=True)
+        t, t_ent = self.mix_time(x_norm, x_norm, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache_parts=kv_cache_parts.time, t0=t0, rope=True)
 
         x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
-        return x, (m_ent, t_ent), BlockKVCache(memory=memory_cache, time=time_cache)
+        return x, (m_ent, t_ent)
