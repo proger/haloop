@@ -131,6 +131,7 @@ class Block(nn.Module):
                 dropout=config.dropout,
                 causal=config.causal,
                 rotary_emb_dim=config.rotary_emb_dim,
+                rotary_emb_interleaved=True,
                 use_flash_attn=True
             )
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
