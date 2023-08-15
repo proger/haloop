@@ -134,6 +134,7 @@ class Decoder(nn.Module, Decodable):
         )
         memory_empty = prompt.new_ones((N,), dtype=torch.bool)
         alive = prompt.new_ones((N,), dtype=torch.bool)
+        logits = features.new_zeros((N,))
 
         for t in range(T):
             # run one token at a time
@@ -157,17 +158,18 @@ class Decoder(nn.Module, Decodable):
                     t0=t,
                 )
 
-            logits = self.lm_head(self.ln_f(y[:, -1, :])) # (N, V)
+            step_logits = self.lm_head(self.ln_f(y[:, -1, :])).max(dim=-1)
 
             output_lengths[alive] += 1
-            token = logits.argmax(dim=-1)
-            prompt[alive, t+1] = token.int()
+            logits[alive] += step_logits.values
+            tokens = step_logits.indices.int()
+            prompt[alive, t+1] = tokens
             alive_ = alive.clone()
-            alive[alive_] = alive[alive_] & (token != etx)
+            alive[alive_] = alive[alive_] & (tokens != etx)
 
         outputs = torch.nested.nested_tensor([p[1:l] for p, l in zip(prompt, output_lengths)])
         alignments = [None]*N
-        return outputs, alignments
+        return outputs, alignments, logits
         
 
 class AudioEncoder(nn.Module):

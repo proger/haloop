@@ -13,7 +13,12 @@ class Decodable(Protocol):
     def log_probs(self, features):
         ...
 
-    def decode(self, features, input_lengths, target_lengths):
+    def decode(
+        self,
+        features: torch.Tensor, # (N, T, C)
+        input_lengths: torch.LongTensor | None = None, # (N,)
+        target_lengths: torch.LongTensor | None = None, # (N,)
+    ) -> tuple[torch.Tensor, list, torch.Tensor]: # sequences, alignments, scores
         ...
 
     def forward(
@@ -43,14 +48,14 @@ class TemporalClassifier(nn.Module, Decodable):
     def decode(self, features, input_lengths, target_lengths):
         logits = self.log_probs(features)
 
-        alignments = logits.argmax(dim=-1)
+        scores, alignments = logits.max(dim=-1) # maybe use input_lengths?
         hypotheses = torch.nested.nested_tensor([
             [i for i in torch.unique_consecutive(alignment) if i]
             for alignment in alignments # greedy
         ])
 
         #decoded_seqs, _decoded_logits = ctc_beam_search_decode_logits(seq) # FIXME: speed it up
-        return hypotheses, alignments
+        return hypotheses, alignments, scores
 
     def forward(self, features, targets, input_lengths=None, target_lengths=None, star_penalty=None, measure_entropy=False):
         if input_lengths is None:
