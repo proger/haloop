@@ -135,10 +135,7 @@ class Decoder(nn.Module, Decodable):
         x = features.new_zeros((N, 0, self.wte.embedding_dim))
         for t in range(target_lengths.max().item()+1):
             # run one token at a time
-            x_ = self.wte(prompt[:, [t]]) #+ self.wpe(torch.arange(t, t+1, device=prompt.device))
-
-            y = x = torch.cat([x, x_], dim=1) # (N, T, C)
-            #y = x_
+            y = self.wte(prompt[:, [t]]) #+ self.wpe(torch.arange(t, t+1, device=prompt.device))
 
             for i, block in enumerate(self.h):
                 y, _, kv_cache[i] = block(
@@ -263,14 +260,34 @@ class MultiHeadAttention(nn.Module):
         q = self.q(x) # (N, T, head_dim * heads)
         q = q.view(N, T, heads, head_dim).transpose(-3, -2) # (N, heads, T, head_dim)
 
-        if kv_cache is None:
+        if causal:
+            # Causal self-attention: add new memory to kv cache
             k = self.k(memory) # (N, S, head_dim * heads)
             v = self.v(memory) # (N, S, head_dim * heads)
             k = k.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
             v = v.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
-            kv_cache = (k, v)
+
+            if kv_cache is not None:
+                k_past, v_past = kv_cache
+                k, v = kv_cache = torch.cat([k_past, k], dim=-2), torch.cat([v_past, v], dim=-2)
+
+                # Query token attends to everything in the cache now.
+                causal = False
+            else:
+                kv_cache = k, v
         else:
-            k, v = kv_cache
+            # cross or bidirectional self
+            if kv_cache is None:
+                # Warm up the cache once.
+                # In the bidirectional self-attention case the cache will be discarded later
+                #
+                k = self.k(memory) # (N, S, head_dim * heads)
+                v = self.v(memory) # (N, S, head_dim * heads)
+                k = k.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
+                v = v.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
+                kv_cache = (k, v)
+            else:
+                k, v = kv_cache
 
         if rope:
             q = rotate_interleaved(q, t0=t0).to(q.dtype)
