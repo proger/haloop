@@ -90,9 +90,6 @@ class Decoder(nn.Module, Decodable):
         targets[torch.arange(N, device=targets.device), target_lengths] = torch.LongTensor([etx]).to(targets.device)
         T = T + 1
 
-        # add positional encoding to features
-        #features = features + sinusoids_like(features)
-
         stats = Stats(meme_entropy=[], self_entropy=[])
 
         if (drop_labels is None and self.training) or drop_labels:
@@ -101,7 +98,7 @@ class Decoder(nn.Module, Decodable):
             prompt = torch.where(keep, prompt, torch.ones_like(prompt))
 
         # run all tokens at once
-        y = self.wte(prompt) # + self.wpe(torch.arange(T, device=prompt.device))
+        y = self.wte(prompt)
         for block in self.h:
             y, (m_ent, t_ent), _ = block(
                 y,
@@ -120,39 +117,53 @@ class Decoder(nn.Module, Decodable):
         "Perform batched greedy decoding."
 
         N, S, _C = features.shape
+        T = target_lengths.max().item()+1
 
         # make an inference prompt:
         # add <s> token to the beginning of each target sequence
         stx, etx = 2, 3 # <s>/BOS/␂ token
-        prompt = input_lengths.new_zeros((N, 1)) + stx
+        prompt = input_lengths.new_zeros((N, T+1)) + etx
+        prompt[:, 0] = stx
         output_lengths = input_lengths.new_zeros((N,))
 
-        # add positional encoding to features
-        #features = features + sinusoids_like(features)
+        L = len(self.h)
+        heads, head_dim = self.h[0].heads, self.h[0].head_dim # assume all layers are the same
+        kv_cache = BlockKVCache(
+            memory=features.new_zeros((L, 2, N, heads, S, head_dim), dtype=torch.float16),
+            time=features.new_zeros((L, 2, N, heads, T, head_dim), dtype=torch.float16),
+        )
+        memory_empty = torch.ones((N,), dtype=torch.bool, device=features.device)
 
-        kv_cache = [BlockKVCache(memory=None, time=None)]*len(self.h)
+        alive = prompt.new_ones((N,), dtype=torch.bool)
 
-        x = features.new_zeros((N, 0, self.wte.embedding_dim))
-        for t in range(target_lengths.max().item()+1):
+        for t in range(T):
             # run one token at a time
-            y = self.wte(prompt[:, [t]]) #+ self.wpe(torch.arange(t, t+1, device=prompt.device))
+            input = prompt[alive, None, [t]]
+            #print('input', input.shape, input)
+            if input.shape[0] == 0:
+                break
+            y = self.wte(input)
 
-            for i, block in enumerate(self.h):
-                y, _, kv_cache[i] = block(
+            for layer, block in enumerate(self.h):
+                y, _, new_cache = block(
                     y,
-                    causal=True, memory=features, memory_lengths=input_lengths,
+                    causal=True, memory=features[alive], memory_lengths=input_lengths[alive],
                     measure_entropy=False,
-                    kv_cache=kv_cache[i],
-                    t0=t
+                    kv_cache_parts=BlockKVCache(
+                        memory=(kv_cache.memory, alive, memory_empty, layer),
+                        time=(kv_cache.time, alive, None, layer)
+                    ),
+                    t0=t,
                 )
-            logits = self.lm_head(self.ln_f(y[:, -1, :])) # (N, 1, V)
+                assert kv_cache.memory[0].untyped_storage().data_ptr()  == new_cache.memory[0].untyped_storage().data_ptr()
 
-            # ignore output on completed sequences
-            completed = prompt[:, t] == etx
-            output_lengths = torch.where(completed, output_lengths, output_lengths+1)
-            token = torch.where(completed, etx, logits.argmax(dim=-1))
+            logits = self.lm_head(self.ln_f(y[:, -1, :])) # (N, V)
 
-            prompt = torch.cat([prompt, token[:, None]], dim=-1) # (N, T+1)
+            output_lengths[alive] += 1
+            token = logits.argmax(dim=-1)
+            prompt[alive, t+1] = token.int()
+            alive_ = alive.clone()
+            alive[alive_] = alive[alive_] & (token != etx)
 
         outputs = torch.nested.nested_tensor([p[1:l] for p, l in zip(prompt, output_lengths)])
         alignments = [None]*N
@@ -241,6 +252,15 @@ class MultiHeadAttention(nn.Module):
         self.proj.weight.data = mha.out_proj.weight.data
         return self
 
+    def read_memory(self, memory):
+        N, S, _C = memory.shape
+        heads, head_dim = self.heads, self.head_dim
+        k = self.k(memory) # (N, S, head_dim * heads)
+        v = self.v(memory) # (N, S, head_dim * heads)
+        k = k.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
+        v = v.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
+        return k, v
+
     def forward(
         self,
         x,
@@ -249,7 +269,7 @@ class MultiHeadAttention(nn.Module):
         mask=None, # (N, ..., T, S) | None
         causal=False,
         measure_entropy=False,
-        kv_cache=None,
+        kv_cache_parts=None, # ((L, 2, N+M, heads, S, head_dim), N+M, L, layer)
         t0=0,
         rope=False,
     ):
@@ -262,32 +282,35 @@ class MultiHeadAttention(nn.Module):
 
         if causal:
             # Causal self-attention: add new memory to kv cache
-            k = self.k(memory) # (N, S, head_dim * heads)
-            v = self.v(memory) # (N, S, head_dim * heads)
-            k = k.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
-            v = v.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
+            k, v = self.read_memory(memory)
 
-            if kv_cache is not None:
-                k_past, v_past = kv_cache
-                k, v = kv_cache = torch.cat([k_past, k], dim=-2), torch.cat([v_past, v], dim=-2)
+            if kv_cache_parts is not None:
+                kv_cache, alive, empty, layer = kv_cache_parts
+                kv_cache[layer, 0, alive, :, t0:t0+S, :] = k
+                kv_cache[layer, 1, alive, :, t0:t0+S, :] = v
+
+                k = kv_cache[layer, 0, alive, :, :t0+S, :] # (N, heads, t0+S, head_dim)
+                v = kv_cache[layer, 1, alive, :, :t0+S, :] # (N, heads, t0+S, head_dim)
 
                 # Query token attends to everything in the cache now.
                 causal = False
-            else:
-                kv_cache = k, v
-        else:
-            # cross or bidirectional self
-            if kv_cache is None:
+                assert T == 1, "Causal self-attention with caching supports only one token at a time."
+        elif kv_cache_parts is not None:
+            # Cross attention: warm up the cache once.
+            kv_cache, alive, empty, layer = kv_cache_parts
+            if empty[layer]:
                 # Warm up the cache once.
-                # In the bidirectional self-attention case the cache will be discarded later
-                #
-                k = self.k(memory) # (N, S, head_dim * heads)
-                v = self.v(memory) # (N, S, head_dim * heads)
-                k = k.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
-                v = v.view(N, S, heads, head_dim).transpose(-3, -2) # (N, heads, S, head_dim)
-                kv_cache = (k, v)
+                k, v = self.read_memory(memory)
+
+                kv_cache[layer, 0, alive, :, :, :] = k
+                kv_cache[layer, 1, alive, :, :, :] = v
+                empty[layer] = False
             else:
-                k, v = kv_cache
+                k = kv_cache[layer, 0, alive, :, :, :] # (N, heads, S, head_dim)
+                v = kv_cache[layer, 1, alive, :, :, :] # (N, heads, S, head_dim)
+        else:
+            # Bidirectional self-attention: no use for the cache
+            k, v = self.read_memory(memory)
 
         if rope:
             q = rotate_interleaved(q, t0=t0).to(q.dtype)
@@ -317,7 +340,7 @@ class MultiHeadAttention(nn.Module):
             x = att @ v # (N, heads, T, head_dim)
         x = x.transpose(-3, -2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
-        return self.dropout(self.proj(x)), att_entropy, kv_cache
+        return self.dropout(self.proj(x)), att_entropy, kv_cache_parts
 
 
 class Block(nn.Module):
@@ -360,28 +383,28 @@ class Block(nn.Module):
         self, x, time_mask=None, causal=False,
         memory=None, memory_lengths=None,
         measure_entropy=False,
-        kv_cache=BlockKVCache(memory=None, time=None),
+        kv_cache_parts=BlockKVCache(memory=None, time=None),
         t0=0,
     ):
         x_norm = self.ln_time(x)
 
         if self.mix_memory is not None:
             memory_mask = torch.arange(memory.shape[-2], device=x.device)[None, :] >= memory_lengths[:, None]
-            m, m_ent, memory_kv_cache = self.mix_memory(
+            m, m_ent, memory_cache = self.mix_memory(
                 x_norm,
                 memory,
                 mask=memory_mask[:, None, None, :],
                 measure_entropy=measure_entropy,
-                kv_cache=kv_cache.memory,
+                kv_cache_parts=kv_cache_parts.memory,
                 t0=t0,
             )
             x = x + m
         else:
             m_ent = torch.tensor(float('-inf'))
-            memory_kv_cache = None
+            memory_cache = None
 
-        t, t_ent, time_kv_cache = self.mix_time(x_norm, x_norm, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache=kv_cache.time, t0=t0, rope=True)
+        t, t_ent, time_cache = self.mix_time(x_norm, x_norm, mask=time_mask, causal=causal, measure_entropy=measure_entropy, kv_cache_parts=kv_cache_parts.time, t0=t0, rope=True)
 
         x = x + t
         x = x + self.mix_chan(self.ln_chan(x))
-        return x, (m_ent, t_ent), kv_cache._replace(memory=memory_kv_cache, time=time_kv_cache)
+        return x, (m_ent, t_ent), BlockKVCache(memory=memory_cache, time=time_cache)
