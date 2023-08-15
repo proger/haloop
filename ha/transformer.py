@@ -139,9 +139,11 @@ class Decoder(nn.Module, Decodable):
         for t in range(T):
             # run one token at a time
             input = prompt[alive, None, [t]]
-            #print('input', input.shape, input)
+
             if input.shape[0] == 0:
+                # all sequences are done
                 break
+
             y = self.wte(input)
 
             for layer, block in enumerate(self.h):
@@ -294,7 +296,7 @@ class MultiHeadAttention(nn.Module):
 
                 # Query token attends to everything in the cache now.
                 causal = False
-                assert T == 1, "Causal self-attention with caching supports only one token at a time."
+                assert T == 1, "Causal self-attention with caching supports only one token at a time. For CPU you might like ha.attention.attend"
         elif kv_cache_parts is not None:
             # Cross attention: warm up the cache once.
             kv_cache, alive, empty, layer = kv_cache_parts
