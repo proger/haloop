@@ -212,9 +212,9 @@ class AudioEncoder(nn.Module):
 
         stats = Stats(meme_entropy=[], self_entropy=[])
 
-        time_mask = torch.arange(x.size(-2), device=x.device)[None, ...] >= input_lengths[..., None]
-        time_mask = time_mask[:, None, None, :]
-        #time_mask = None # ????
+        # time_mask = torch.arange(x.size(-2), device=x.device)[None, ...] >= input_lengths[..., None]
+        # time_mask = time_mask[:, None, None, :]
+        time_mask = None # ???? this feels bad but omg so fast
 
         for block in self.h:
             x, (m_ent, t_ent) = block(
