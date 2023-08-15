@@ -112,8 +112,6 @@ class MLP(nn.Module):
         return x
 
 
-from flash_attn.modules.mha import MHA
-
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -122,6 +120,7 @@ class Block(nn.Module):
         if not self._rotary_emb_dim:
             self.attn = MonitoredSelfAttention(config)
         else:
+            from flash_attn.modules.mha import MHA
             self.attn = MHA(
                 embed_dim=config.n_embd,
                 num_heads=config.n_head,
