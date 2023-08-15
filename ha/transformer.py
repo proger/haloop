@@ -294,7 +294,8 @@ class MultiHeadAttention(nn.Module):
 
                 # Query token attends to everything in the cache now.
                 causal = False
-                assert T == 1, "Causal self-attention with caching supports only one token at a time. For CPU you might like ha.attention.attend"
+                assert T == 1, "Causal self-attention with caching supports only one token at a time. " + \
+                                "For CPU you might like ha.attention.attend"
         elif kv_cache_parts is not None:
             # Cross attention: warm up the cache once.
             kv_cache, alive, empty, layer = kv_cache_parts
