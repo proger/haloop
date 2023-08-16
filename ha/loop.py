@@ -331,6 +331,7 @@ def make_parser():
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=48, help="Batch size")
+    parser.add_argument('--eval-batch-size', type=int, default=1024, help="Batch size for evaluation")
     parser.add_argument('--accumulate', type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument('--seed', type=int, default=42, help="Initial random seed")
     parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
@@ -366,7 +367,7 @@ def main():
         valid_loader = torch.utils.data.DataLoader(
             concat_datasets(args.eval),
             collate_fn=Collator(system.vocab),
-            batch_size=args.batch_size,
+            batch_size=args.eval_batch_size,
             shuffle=False,
             num_workers=args.num_workers,
         )
@@ -375,7 +376,7 @@ def main():
         test_loader = torch.utils.data.DataLoader(
             concat_datasets(args.test),
             collate_fn=Collator(system.vocab),
-            batch_size=args.batch_size,
+            batch_size=args.eval_batch_size,
             shuffle=False,
             num_workers=args.num_workers,
         )
