@@ -285,9 +285,6 @@ class System(nn.Module):
         stat['wer'] = round(wer, 2)
         word_error = Counter(word_dist)
 
-        if self.args.quiet:
-            return label_error, word_error
-
         ali, _ = self.vocab.decode(ali)
 
         if isinstance(ref1, list):
@@ -302,6 +299,9 @@ class System(nn.Module):
             star = 42 # b'*'
             hyp, ref = list(zip(*align(hyp1, ref1, star)))
             hyp, ref = bytes(hyp), bytes(ref)
+
+        if self.args.quiet:
+            return label_error, word_error, hyp
 
         print(epoch, dataset_index, f'hyp{attempt}', self.vocab.format(hyp), sep="\t", flush=True)
         print(epoch, dataset_index, 'ref', self.vocab.format(ref), sep="\t", flush=True)
