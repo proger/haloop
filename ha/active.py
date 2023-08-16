@@ -32,16 +32,24 @@ def make_per_sample_gradients(system):
     return vmap(grad(compute_loss), in_dims=(None, 0, 0))
 
 
+def norm_batched(x, p=2.0, eps=1e-6):
+    N = x.size(0)
+    x = x.view(N, -1)
+    a = x.abs().max(dim=-1, keepdim=True).values + eps
+    return a.squeeze() * ((x / a).abs()**p).sum(dim=-1) ** (1./p)
+
+
 def gradient_norms(
     system: MiniSystem,
-    features: torch.Tensor, # (N, T, C)
-    targets_kbest: torch.Tensor, # (K, N, U)
+    inputs: torch.Tensor, # (N, T, C)
+    targets: torch.Tensor, # (N, U)
     input_lengths: torch.Tensor, # (N,)
-    target_kbest_lengths: torch.Tensor # (K, N)
-):
+    target_lengths: torch.Tensor # (N,)
+) -> torch.Tensor: # (N,)
+    """Compute the gradient norms for each sample in the batch independently.
+    Puts system into evaluation mode.
+    """
     system.eval()
-
-    K, N, U = targets_kbest.shape
 
     params = {k: v.detach() for k, v in system.named_parameters()}
     buffers = {k: v.detach() for k, v in system.named_buffers()}
@@ -49,13 +57,13 @@ def gradient_norms(
     per_sample_gradients = make_per_sample_gradients(system)
 
     args = (
-        features[:, None, :, :].repeat_interleave(K, 0),   # (K*N, 1, T, C)
-        targets_kbest[:, :, None, :].view(-1, 1, U),       # (K*N, 1, U)
-        input_lengths[:, None].repeat_interleave(K, 0),    # (K*N, 1)
-        target_kbest_lengths[:, :, None].view(-1, 1)       # (K*N, 1)
+        inputs[:, None, :, :],
+        targets[:, None, :],
+        input_lengths[:, None],
+        target_lengths[:, None],
     )
 
     tree = per_sample_gradients(params, buffers, args)
     flat_tree, spec = tree_flatten(tree)
-    return torch.norm(torch.stack([torch.norm(x.sum(0), 2.0) for x in flat_tree]), 2.0)
+    return norm_batched(torch.stack([norm_batched(x) for x in flat_tree]).T)
 
