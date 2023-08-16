@@ -4,7 +4,7 @@ import torch
 
 
 class Checkpointer:
-    def __init__(self, path: Path, save: Literal['all', 'best', 'last+best'] = 'best'):
+    def __init__(self, path: Path, save: Literal['all', 'best', 'last+best', 'none'] = 'best'):
         self.best_loss = float('inf')
         self.save = save
         self.path = path
@@ -15,9 +15,8 @@ class Checkpointer:
         if best := (loss <= self.best_loss):
             self.best_loss = loss
 
-        save = self.save == 'all'
-        if best and 'best' in self.save:
-            save = True
+        if self.save == 'none':
+            return
 
         if self.save == 'all':
             checkpoint = checkpoint_fn()
