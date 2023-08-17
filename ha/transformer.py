@@ -330,20 +330,69 @@ class MultiHeadAttention(nn.Module):
 
             att_entropy = torch.tensor(float('-inf'))
         else:
-            qk = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.shape[-1]) # (N, heads, T, S)
-            if mask is not None:
-                # use ~mask with flash attention
-                qk = qk.masked_fill(mask, float('-inf'))
+            x, att_entropy = attend_chunked(q, k, v, mask)
+            #x, att_entropy = attend(q, k, v, mask)
 
-            att = qk.softmax(dim=-1)
-
-            # measure attention entropy
-            att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
-
-            x = att @ v # (N, heads, T, head_dim)
         x = x.transpose(-3, -2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
         return self.dropout(self.proj(x)), att_entropy
+
+
+def attend_chunked(
+    q, # (N, heads, T, head_dim)
+    k, # (N, heads, S, head_dim)
+    v, # (N, heads, S, head_dim)
+    mask, # (N, ..., T, S) | None
+    chunk_size=32
+): # -> (N, heads, T, head_dim), stub
+    x = torch.empty_like(q) # (N, heads, T, head_dim)
+
+    q_chunks = q.split(chunk_size, dim=-2)
+    if mask is not None:
+        mask_chunks = mask.split(chunk_size, dim=-2)
+    else:
+        mask_chunks = [None] * len(q_chunks)
+
+    kT = k.transpose(-2, -1)
+
+    for i, (q_chunk, mask_chunk) in enumerate(zip(q_chunks, mask_chunks)):
+        qk = torch.matmul(q_chunk, kT) / math.sqrt(k.shape[-1]) # (N, heads, T/chunk_size, S)
+        if mask is not None:
+            qk.masked_fill_(mask_chunk, float('-inf'))
+
+        # online softmax
+        qk -= qk.amax(dim=-1, keepdim=True).detach()
+        qk.exp_()
+
+        num = torch.matmul(qk, v)
+        den = qk.sum(dim=-1, keepdim=True)
+
+        x[:, :, i * chunk_size:(i + 1) * chunk_size, :] = num / den
+
+    # TODO: measure attention entropy
+    att_entropy = torch.tensor(float('-inf'))
+
+    return x, att_entropy
+
+
+def attend(
+    q, # (N, heads, T, head_dim)
+    k, # (N, heads, S, head_dim)
+    v, # (N, heads, S, head_dim)
+    mask, # (N, ..., T, S) | None
+): # -> (N, heads, T, head_dim), entropy
+    qk = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(k.shape[-1]) # (N, heads, T, S)
+    if mask is not None:
+        # use ~mask with flash attention
+        qk = qk.masked_fill(mask, float('-inf'))
+
+    att = qk.softmax(dim=-1)
+
+    # measure attention entropy
+    att_entropy = (-att * torch.log(att + 1e-8)).sum(dim=-1).mean(dim=(0,1,2))
+
+    x = att @ v # (N, heads, T, head_dim)
+    return x, att_entropy
 
 
 class Block(nn.Module):
