@@ -122,7 +122,7 @@ class Decoder(nn.Module, Decodable):
         # make an inference prompt:
         # add <s> token to the beginning of each target sequence
         stx, etx = 2, 3 # <s>/BOS/␂ token
-        prompt = input_lengths.new_zeros((N, T+1)) + etx
+        prompt = input_lengths.new_zeros((N, T+1), dtype=torch.long) + etx
         prompt[:, 0] = stx
         output_lengths = input_lengths.new_zeros((N,))
 
@@ -162,7 +162,7 @@ class Decoder(nn.Module, Decodable):
 
             output_lengths[alive] += 1
             logits[alive] += step_logits.values
-            tokens = step_logits.indices.int()
+            tokens = step_logits.indices.long()
             prompt[alive, t+1] = tokens
             alive_ = alive.clone()
             alive[alive_] = alive[alive_] & (tokens != etx)
