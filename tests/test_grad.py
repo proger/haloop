@@ -26,18 +26,27 @@ def test_gradient_norms():
     target_lengths = torch.tensor([10]*N, device='cuda', dtype=torch.long)
 
     serial_grad_norms = torch.zeros(N, device='cuda', dtype=torch.float16)
+    serial_losses = torch.zeros(N, device='cuda', dtype=torch.float16)
     for i in range(N):
         system.zero_grad()
-        system(inputs[i:i+1], targets[i:i+1], input_lengths[i:i+1], target_lengths[i:i+1]).backward()
+        loss = system(inputs[i:i+1], targets[i:i+1], input_lengths[i:i+1], target_lengths[i:i+1])
+        loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(system.parameters(), 10000, foreach=False)
-        print(i, 'grad_norm', grad_norm)
+        print(i, 'grad_norm,loss', grad_norm.item(), loss.item(), sep='\t')
         serial_grad_norms[i] = grad_norm
+        serial_losses[i] = loss
 
-    parallel_grad_norms = gradient_norms(system, inputs, targets, input_lengths, target_lengths)
+    parallel_grad_norms, parallel_losses = gradient_norms(system, inputs, targets, input_lengths, target_lengths)
     print('parallel_grad_norms', parallel_grad_norms)
+    print('parallel_losses', parallel_losses)
 
     assert torch.allclose(
         parallel_grad_norms,
         serial_grad_norms,
         atol=1e-3,
+    )
+
+    assert torch.allclose(
+        parallel_losses,
+        serial_losses,
     )

@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.func import functional_call, vmap, grad
+from torch.func import functional_call, vmap, grad_and_value
 from torch.utils._pytree import tree_flatten
 
 from .recognizer import Decodable
@@ -58,7 +58,7 @@ def make_per_sample_gradients(system):
         loss = functional_call(system, (params, buffers), args)
         return loss
 
-    return vmap(grad(compute_loss), in_dims=(None, 0, 0))
+    return vmap(grad_and_value(compute_loss), in_dims=(None, 0, 0))
 
 
 def norm_batched(x, p=2.0, eps=1e-6):
@@ -74,9 +74,11 @@ def gradient_norms(
     targets: torch.Tensor, # (N, U)
     input_lengths: torch.Tensor, # (N,)
     target_lengths: torch.Tensor # (N,)
-) -> torch.Tensor: # (N,)
+) -> tuple[torch.Tensor, torch.Tensor]: # (N,), (N,)
     """Compute the gradient norms for each sample in the batch independently.
     Puts system into evaluation mode.
+
+    Returns a tuple of (gradient_norms, losses).
     """
     system.eval()
 
@@ -92,7 +94,7 @@ def gradient_norms(
         target_lengths[:, None],
     )
 
-    tree = per_sample_gradients(params, buffers, args)
+    tree, losses = per_sample_gradients(params, buffers, args)
     flat_tree, spec = tree_flatten(tree)
-    return norm_batched(torch.stack([norm_batched(x) for x in flat_tree]).T)
+    return norm_batched(torch.stack([norm_batched(x) for x in flat_tree]).T), losses
 
