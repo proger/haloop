@@ -29,7 +29,7 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
-def attend(q, k, v, past=None, measure_entropy=False, is_causal=False, dropout_p=0.0):
+def attend_cached(q, k, v, past=None, measure_entropy=False, is_causal=False, dropout_p=0.0):
     T = q.size(-2)
 
     if past is not None:
@@ -87,8 +87,8 @@ class MonitoredSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T', hs)
 
-        y, k, v, att_entropy = attend(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal,
-                                      dropout_p=self.dropout if self.training else 0.0)
+        y, k, v, att_entropy = attend_cached(q, k, v, past=past, measure_entropy=measure_entropy, is_causal=self.causal,
+                                             dropout_p=self.dropout if self.training else 0.0)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 

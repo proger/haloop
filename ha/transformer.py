@@ -330,8 +330,8 @@ class MultiHeadAttention(nn.Module):
 
             att_entropy = torch.tensor(float('-inf'))
         else:
-            x, att_entropy = attend_chunked(q, k, v, mask)
-            #x, att_entropy = attend(q, k, v, mask)
+            #x, att_entropy = attend_chunked(q, k, v, mask)
+            x, att_entropy = attend(q, k, v, mask)
 
         x = x.transpose(-3, -2).reshape(N, T, heads * head_dim) # (N, T, heads * head_dim)
         
@@ -361,8 +361,9 @@ def attend_chunked(
             qk.masked_fill_(mask_chunk, float('-inf'))
 
         # online softmax
-        qk -= qk.amax(dim=-1, keepdim=True).detach()
-        qk.exp_()
+        #qk -= qk.amax(dim=-1, keepdim=True).detach()
+        #qk.exp_()
+        qk = (qk - qk.amax(dim=-1, keepdim=True)).exp()
 
         num = torch.matmul(qk, v)
         den = qk.sum(dim=-1, keepdim=True)
