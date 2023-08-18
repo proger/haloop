@@ -34,7 +34,7 @@ def compute_grad_norm(self: MiniSystem, loader):
         target_lengths = target_lengths.to(device) # (N,)
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
-            norms = gradient_norms(
+            norms, losses = gradient_norms(
                 self,
                 inputs,
                 targets,
@@ -43,8 +43,8 @@ def compute_grad_norm(self: MiniSystem, loader):
             )
 
 
-        for dataset_index, norm in zip(dataset_indices, norms):
-            print('grad_norm', dataset_index.item(), norm.item(), sep='\t', flush=True)
+        for dataset_index, norm, loss in zip(dataset_indices, norms, losses):
+            print('grad_norm,loss', dataset_index.item(), norm.item(), loss.item(), sep='\t', flush=True)
         # dataset_norms = torch.stack(attempt_norms) # (A, N)
         # dataset_logits = torch.stack(attempt_logits) # (A, N)
         # dataset_grad_length = (dataset_norms.square().log() - dataset_logits).logsumexp(0) # (N,)
