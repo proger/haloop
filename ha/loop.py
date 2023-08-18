@@ -348,6 +348,9 @@ def make_parser():
     parser.add_argument('--test', type=str, required=False, help="Datasets to run final evaluation (test) on, comma separated")
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
 
+    parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
+    parser.add_argument('--grad-norms-batch-size', type=int, default=32, help="Batch size for gradient norms computation")
+
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
     parser.add_argument('--num-workers', type=int, default=32, help="Number of workers for data loading")
@@ -438,6 +441,20 @@ def main():
 
     if args.test:
         system.evaluate(epoch, test_loader, attempts=args.test_attempts)
+
+    if args.grad_norms:
+        from ha.active import compute_grad_norm, MiniSystem
+        mini_system = MiniSystem(system.encoder, system.recognizer)
+
+        egl_loader = torch.utils.data.DataLoader(
+            concat_datasets(args.grad_norms),
+            collate_fn=Collator(system.vocab),
+            batch_size=args.grad_norms_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+        )
+
+        compute_grad_norm(mini_system, egl_loader)
 
 
 if __name__ == '__main__':

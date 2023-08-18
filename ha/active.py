@@ -1,27 +1,56 @@
-
 import torch
 import torch.nn as nn
 from torch.func import functional_call, vmap, grad
-from torch.utils._pytree import tree_flatten, tree_map
+from torch.utils._pytree import tree_flatten
 
 from .recognizer import Decodable
 from .transformer import CTCAttentionDecoder
 
 
 class MiniSystem(nn.Module):
-    def __init__(self, encoder, decoder: Decodable):
+    def __init__(self, encoder, recognizer: Decodable):
         super().__init__()
         self.encoder = encoder
-        if isinstance(decoder, CTCAttentionDecoder):
+        if isinstance(recognizer, CTCAttentionDecoder):
             # ignore CTC loss as there is no batching rule for vmap
-            self.decoder = decoder.decoder
+            self.recognizer = recognizer.decoder
         else:
-            self.decoder = decoder
+            self.recognizer = recognizer
 
-    def forward(self, x, y, xl, yl):
-        x, xl, _ = self.encoder(x, xl, measure_entropy=True)
-        loss, _ = self.decoder(x, y, xl, yl, measure_entropy=True)
+    def forward(self, inputs, targets, input_lengths, target_lengths):
+        features, feature_lengths, _ = self.encoder(inputs, input_lengths, measure_entropy=True)
+        loss, _ = self.recognizer(features, targets, feature_lengths, target_lengths, measure_entropy=True, drop_labels=False)
         return loss
+
+
+def compute_grad_norm(self: MiniSystem, loader):
+    device = next(self.encoder.parameters()).device
+
+    self.eval()
+    for dataset_indices, inputs, targets, input_lengths, target_lengths in loader:
+        inputs = inputs.to(device) # (N, T, C)
+        input_lengths = input_lengths.to(device) # (N,)
+        targets = targets.to(device) # (N, U)
+        target_lengths = target_lengths.to(device) # (N,)
+
+        with torch.autocast(device_type='cuda', dtype=torch.float16):
+            norms = gradient_norms(
+                self,
+                inputs,
+                targets,
+                input_lengths,
+                target_lengths.long() - 1,
+            )
+
+
+        for dataset_index, norm in zip(dataset_indices, norms):
+            print('grad_norm', dataset_index.item(), norm.item(), sep='\t', flush=True)
+        # dataset_norms = torch.stack(attempt_norms) # (A, N)
+        # dataset_logits = torch.stack(attempt_logits) # (A, N)
+        # dataset_grad_length = (dataset_norms.square().log() - dataset_logits).logsumexp(0) # (N,)
+
+        # for dataset_index, grad_length in zip(dataset_indices, dataset_grad_length):
+        #     print('egl score', dataset_index.item(), grad_length.item(), sep='\t', flush=True)
 
 
 def make_per_sample_gradients(system):
