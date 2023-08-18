@@ -15,22 +15,23 @@ class LabelFile(torch.utils.data.Dataset):
             48000: torchaudio.transforms.Resample(orig_freq=48000), # opus
         }
         with open(path) as f:
-            self.ark = dict(line.strip().split(maxsplit=1) for line in f)
-            self.filenames = list(self.ark.keys())
+            # having multiple labels per key (repeated keys) is allowed
+            self.ark = [line.strip().split(maxsplit=1) for line in f]
 
     def __len__(self):
-        return len(self.filenames)
+        return len(self.ark)
 
     def utt_id(self, index):
-        return self.filenames[index]
+        return self.ark[index][0]
 
     def __getitem__(self, index):
-        wav, sr = torchaudio.load(self.filenames[index])
+        filename, text = self.ark[index]
+        wav, sr = torchaudio.load(filename)
         resample = self.resample.get(sr)
         if not resample:
             raise ValueError(f'unsupported sample rate {sr}, add a resampler to LabelFile.resample')
         wav = resample(wav)
-        return index, wav, self.ark[self.filenames[index]]
+        return index, wav, text
 
 
 class RandomizedPairsDataset(torch.utils.data.Dataset):
