@@ -142,8 +142,15 @@ class System(nn.Module):
         local_step, accumulate = 0, 0
 
         self.train()
-        for i, (_batch_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
-            loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
+        for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
+            try:
+                loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
+            except RuntimeError as e:
+                log(f'[{epoch}, {global_step:5d}]', 'OOM, data:', dataset_indices, 'total input frames:', input_lengths.sum().item(), flush=True)
+                if args.allow_oom:
+                    continue
+                else:
+                    raise e
 
             if torch.isnan(loss):
                 log(f'[{epoch}, {global_step:5d}], loss is nan, skipping batch', flush=True)
@@ -164,7 +171,7 @@ class System(nn.Module):
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(chain(self.encoder.parameters()), self.args.clip_grad_norm, error_if_nonfinite=False)
             if torch.isinf(grad_norm) or torch.isnan(grad_norm):
-                log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch, loss: {loss:.5f}, data: {_batch_indices}', flush=True)
+                log(f'[{epoch}, {global_step:5d}], grad_norm is inf or nan, skipping batch, loss: {loss:.5f}, data: {dataset_indices}', flush=True)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 continue
@@ -336,6 +343,7 @@ def make_parser():
     parser.add_argument('--seed', type=int, default=42, help="Initial random seed")
     parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
     parser.add_argument('--anomaly', action='store_true', help="Detect NaN/Inf during training")
+    parser.add_argument('--allow-oom', action='store_true', help="Skip batches when OOM happens")
 
     LR.add_arguments(parser)
 
