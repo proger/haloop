@@ -357,7 +357,7 @@ def make_parser():
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
 
     parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
-    parser.add_argument('--grad-norms-batch-size', type=int, default=24, help="Batch size for gradient norms computation")
+    parser.add_argument('--grad-norms-batch-duration', type=int, default=500, help="Batch duration in seconds for gradient norms computation")
 
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
@@ -452,13 +452,15 @@ def main():
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
+        from ha.sampler import DurationBatchSampler
+
         mini_system = MiniSystem(system.encoder, system.recognizer)
 
+        dataset = concat_datasets(args.grad_norms)
         egl_loader = torch.utils.data.DataLoader(
-            concat_datasets(args.grad_norms),
+            dataset,
             collate_fn=Collator(system.vocab),
-            batch_size=args.grad_norms_batch_size,
-            shuffle=False,
+            batch_sampler=DurationBatchSampler(dataset, args.grad_norms_batch_duration),
             num_workers=args.num_workers,
         )
 
