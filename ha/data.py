@@ -1,7 +1,30 @@
+import bisect
 from pathlib import Path
 
 import torch
 import torchaudio
+
+
+class ConcatDataset(torch.utils.data.ConcatDataset):
+    def get_dataset(self, idx):
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError("absolute value of index should not exceed dataset length")
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        return self.datasets[dataset_idx], sample_idx
+
+    def utt_id(self, index):
+        dataset, index = self.get_dataset(index)
+        return dataset.utt_id(index)
+
+    def duration(self, index):
+        dataset, index = self.get_dataset(index)
+        return dataset.duration(index)
 
 
 class LabelFile(torch.utils.data.Dataset):
@@ -24,6 +47,12 @@ class LabelFile(torch.utils.data.Dataset):
     def utt_id(self, index):
         return self.ark[index][0]
 
+    def duration(self, index):
+        filename, text = self.ark[index]
+        info = torchaudio.info(filename)
+        seconds = info.num_frames / info.sample_rate
+        return seconds
+
     def __getitem__(self, index):
         filename, text = self.ark[index]
         wav, sr = torchaudio.load(filename)
@@ -34,26 +63,19 @@ class LabelFile(torch.utils.data.Dataset):
         return index, wav, text
 
 
-class RandomizedPairsDataset(torch.utils.data.Dataset):
+class RandomizedPairsDataset(ConcatDataset):
     "A dataset that concatenates random pairs of utterances from another dataset"
 
-    def __init__(self, dataset, seed=0):
-        super().__init__()
-        self.dataset = dataset
+    def __init__(self, datasets, seed=0):
+        super().__init__(datasets)
         generator = torch.Generator().manual_seed(seed)
-        self.pair_permutation = torch.randperm(len(dataset), generator=generator)
-        self.silences = torch.randint(160, 4000, (len(dataset),), generator=generator)
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def utt_id(self, index):
-        return self.dataset.utt_id(index)
+        self.pair_permutation = torch.randperm(len(self), generator=generator)
+        self.silences = torch.randint(160, 4000, (len(self),), generator=generator)
 
     def __getitem__(self, index):
         pair_index = self.pair_permutation[index]
-        _, wav1, text1 = self.dataset[index]
-        _, wav2, text2 = self.dataset[pair_index]
+        _, wav1, text1 = super().__getitem__(index)
+        _, wav2, text2 = super().__getitem__(pair_index)
         silence = torch.zeros(1, self.silences[index], dtype=wav1.dtype)
         wav = torch.cat([wav1, silence, wav2], dim=1)
         text = f'{text1} {text2}'
@@ -78,19 +100,9 @@ class LibriSpeech(torch.utils.data.Dataset):
         return index, wav, text
 
 
-class Mask(torch.utils.data.Dataset):
-    def __init__(self, dataset):
-        super().__init__()
-        self.dataset = dataset
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def utt_id(self, index):
-        return self.dataset.utt_id(index)
-
+class Mask(ConcatDataset):
     def __getitem__(self, index):
-        index, frames, text = self.dataset[index]
+        index, frames, text = super().__getitem__(index)
 
         frames = frames[None,None,:]
 
@@ -111,53 +123,26 @@ class Mask(torch.utils.data.Dataset):
         return index, frames[0, 0, :], text
 
 
-class Speed(torch.utils.data.Dataset):
-    def __init__(self, dataset):
-        super().__init__()
-        self.dataset = dataset
+class Speed(ConcatDataset):
+    def __init__(self, datasets):
+        super().__init__(datasets)
         self.transform = torchaudio.transforms.SpeedPerturbation(16000, [0.95, 0.98, 1.0, 1.02, 1.05])
 
-    def __len__(self):
-        return len(self.dataset)
-
-    def utt_id(self, index):
-        return self.dataset.utt_id(index)
-
     def __getitem__(self, index):
-        index, wav, text = self.dataset[index]
+        index, wav, text = super().__getitem__(index)
         return index, self.transform(wav)[0], text
 
 
-class Fbank(torch.utils.data.Dataset):
-    def __init__(self, dataset):
-        super().__init__()
-        self.dataset = dataset
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def utt_id(self, index):
-        return self.dataset.utt_id(index)
-
+class Fbank(ConcatDataset):
     def __getitem__(self, index):
-        index, wav, text = self.dataset[index]
+        index, wav, text = super().__getitem__(index)
         frames = torchaudio.compliance.kaldi.fbank(wav, num_mel_bins=80)
         return index, frames, text
 
 
-class MFCC(torch.utils.data.Dataset):
-    def __init__(self, dataset):
-        super().__init__()
-        self.dataset = dataset
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def utt_id(self, index):
-        return self.dataset.utt_id(index)
-
+class MFCC(ConcatDataset):
     def __getitem__(self, index):
-        index, wav, text = self.dataset[index]
+        index, wav, text = super().__getitem__(index)
         frames = torchaudio.compliance.kaldi.mfcc(wav)
 
         # utterance-level CMVN
@@ -166,20 +151,13 @@ class MFCC(torch.utils.data.Dataset):
         return index, frames, text
 
 
-class WordDrop(torch.utils.data.Dataset):
-    def __init__(self, dataset, p_drop_words=0.4):
-        super().__init__()
-        self.dataset = dataset
+class WordDrop(ConcatDataset):
+    def __init__(self, datasets, p_drop_words=0.4):
+        super().__init__(datasets)
         self.p_drop_words = p_drop_words
 
-    def __len__(self):
-        return len(self.dataset)
-
-    def utt_id(self, index):
-        return self.dataset.utt_id(index)
-
     def __getitem__(self, index):
-        index, frames, original_text = self.dataset[index]
+        index, frames, original_text = super().__getitem__(index)
         generator = torch.Generator().manual_seed(index)
         text = ' '.join(w for w in original_text.split(' ') if torch.rand(1, generator=generator) > self.p_drop_words)
         if not text:
@@ -196,21 +174,21 @@ def make_dataset(s):
         case ['labels', label_file]: # over filename
             return LabelFile(Path(label_file))
         case ['randpairs', subset]:
-            return RandomizedPairsDataset(make_dataset(subset))
+            return RandomizedPairsDataset([make_dataset(subset)])
         case ['head', subset]: # any
             return torch.utils.data.Subset(make_dataset(subset), range(16))
         case ['wdrop.4', subset]: # any
-            return WordDrop(make_dataset(subset), p_drop_words=0.4)
+            return WordDrop([make_dataset(subset)], p_drop_words=0.4)
         case ['wdrop.1', subset]: # any
-            return WordDrop(make_dataset(subset), p_drop_words=0.1)
+            return WordDrop([make_dataset(subset)], p_drop_words=0.1)
         case ['mask', subset]: # over spectrograms
-            return Mask(make_dataset(subset))
+            return Mask([make_dataset(subset)])
         case ['speed', subset]: # only applies over waveforms
-            return Speed(make_dataset(subset))
+            return Speed([make_dataset(subset)])
         case ['mfcc', subset]: # applies over waveforms
-            return MFCC(make_dataset(subset))
+            return MFCC([make_dataset(subset)])
         case ['fbank', subset]: # applies over waveforms
-            return Fbank(make_dataset(subset))
+            return Fbank([make_dataset(subset)])
         case ['sinusoids0']: # synthetic
             from ha.sinusoids import SyntheticAlignments
             return SyntheticAlignments(examples_per_bin=100000, max=100)
@@ -238,15 +216,16 @@ def make_dataset(s):
             else:
                 return LibriSpeech(subset)
 
+
 def concat_datasets(s):
     if not s:
         return []
     parts = s.split(',')
     paths = [Path(part) for part in parts]
-    return torch.utils.data.ConcatDataset(
+    return ConcatDataset([
         make_dataset(str(part))
         for path, part in zip(paths, parts)
-    )
+    ])
 
 
 if __name__ == '__main__':
