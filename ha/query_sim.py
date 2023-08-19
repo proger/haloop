@@ -24,20 +24,8 @@ parser.add_argument('--query-size', type=int, default=2196,
                     help='number of utterances to query')
 parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
                     help='experiment directory')
-parser.add_argument('--grad-norms-dataset', type=Path, default=Path('exp/active/egl/01/hyp.txt.piece'),
-                    help="""Dataset with multiple candidate labels per utterance.
-
-Computed like this:
-# ,18a053800d0.1720196 is output of https://wandb.ai/stud76/ha/runs/wgr0e8xn
-awk '/valid \[12/{x=1} x' ,18a053800d0.1720196 | grep '^12' | grep hyp | sort -n -k2,3 | gzip -c > exp/active/egl/01/hyp.txt.gz
-paste <(seq 0 28537) data/corrupted-librispeech/train-clean-100.dirty28538.txt.piece | awk '{print $1, $2}' > exp/active/egl/01/id2flac
-zcat exp/active/egl/01/hyp.txt.gz | cut -f2,4 | join exp/active/egl/01/id2flac - | cut -d' ' -f2- > exp/active/egl/01/hyp.txt.piece
-""")
-parser.add_argument('--grad-norms-result', type=Path, default=Path('exp/active/egl/01/grads.txt'),
-                    help="""File with output of hac --grad-norms:
-
-hac --grad-norms fbank:exp/active/egl/01/hyp.txt.piece --device cuda:0 --init exp/active/egl/01/last.pt --vocab exp/libribpe.vocab --compile | tee exp/active/egl/01/grads.txt
-""")
+parser.add_argument('--log', type=Path, default=Path(',18a09a848c2.3343822'),
+                    help='log of the training run')
 
 def read_text(filename: Path):
     with open(filename) as f:
@@ -46,17 +34,53 @@ def read_text(filename: Path):
 def read_grads(filename: Path):
     return pd.read_csv(filename, sep='\t', header=None, names=['stub', 'dataset_index', 'grad_norm', 'loss'])
 
+def training_log_to_dataset(training_log_filename: Path):
+    "reads output of hac using heuristics to extract the dataset"
+    train_hypotheses = []
+    with open(training_log_filename) as f:
+        decoding_train = False
+        for line in f:
+            if decoding_train and line.startswith('12') and 'hyp' in line:
+                epoch, dataset_index, hypN, text = line.strip().split('\t')
+                assert epoch == "12" and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
+                train_hypotheses.append((int(dataset_index), text))
+            elif line.startswith('valid [12'):
+                decoding_train = True
+                continue
+    df = pd.DataFrame(train_hypotheses, columns=['dataset_index', 'hyp_text'])
+    df.sort_values(by='dataset_index', ascending=True, inplace=True)
+    return df.set_index('dataset_index')
+
 
 if __name__ == '__main__':
     args = parser.parse_args()
 
-    grad_norms_dataset = read_text(args.grad_norms_dataset)
-    grad_norms_result = read_grads(args.grad_norms_result)
     oracle = read_text(args.oracle)
     corrupted = read_text(args.corrupted)
 
+    train_hypotheses = training_log_to_dataset(args.log)
+    grad_norms_dataset = train_hypotheses.join(corrupted)
+    grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
+
+    if not (args.exp / 'grads.txt').exists():
+        print('please compute gradient norms by running:', file=sys.stderr)
+        print(
+            'nq bash -c "hac',
+            f'--grad-norms fbank:{args.exp / "hyp.txt.piece"}',
+            '--device cuda:1',
+            '--init', args.exp / 'last.pt',
+            '--vocab exp/libribpe.vocab --compile | tee', args.exp / 'grads.txt',
+            '"'
+        )
+        sys.exit(1)
+
+    grad_norms_result = read_grads(args.exp / 'grads.txt')
+
     # Compute log-space EGL for each utterance
-    grad_norms = pd.concat([grad_norms_dataset, grad_norms_result], axis=1)
+    grad_norms = pd.concat([
+        grad_norms_dataset.reset_index(),
+        grad_norms_result
+    ], axis=1)
 
     import numpy as np
     from scipy.special import logsumexp
@@ -87,15 +111,23 @@ if __name__ == '__main__':
 
     next_exp = args.exp.parent / f'{int(args.exp.name) + 1:02}'
     prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
+    # TODO: concat clean.txt.piece from previous experiments
     print(
-        'hac --train',
+        'nq hac --train',
         ','.join([prefix + file for prefix in prefixes for file in [
-        str(args.exp / 'clean.txt.piece'),
-        str(args.exp / 'corrupted.txt.piece'),
+            str(args.exp / 'clean.txt.piece'),
+            str(args.exp / 'corrupted.txt.piece'),
         ]]),
         '--eval fbank:data/corrupted-librispeech/dev-clean.txt.piece',
         '--test-attempts 20',
         f'--test fbank:{args.exp}/corrupted.txt.piece',
         '--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --device cuda:1 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab exp/libribpe.vocab --weight_decay 0.1',
         f'--exp {next_exp}',
+    )
+    print(
+        'python -m ha.query_sim',
+        '--oracle', args.oracle,
+        '--corrupted', args.exp / 'corrupted.txt.piece',
+        '--exp', next_exp,
+        '--log', '???',
     )
