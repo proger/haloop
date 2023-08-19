@@ -1,6 +1,7 @@
 import torch
 from torch.utils.data import Sampler
 from typing import Iterator
+import sys
 
 
 class DurationBatchSampler(Sampler[list[int]]):
@@ -14,8 +15,9 @@ class DurationBatchSampler(Sampler[list[int]]):
         duration, max_duration = 0, 0
         for i in self.indices.tolist():
             sample_duration = self.data_source.duration(i)
-            if (duration + sample_duration) > self.max_duration:
-                #print('batch', len(batch), duration)
+            max_duration = max(max_duration, sample_duration)
+            if (len(batch) + 1) * max_duration > self.max_duration:
+                #print('batch', len(batch), duration, file=sys.stderr)
                 yield batch
                 batch = []
                 duration, max_duration = 0, 0
