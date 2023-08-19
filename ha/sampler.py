@@ -11,15 +11,14 @@ class DurationBatchSampler(Sampler[list[int]]):
 
     def __iter__(self) -> Iterator[list[int]]:
         batch: list[int] = []
-        duration = 0
-        max_duration = 0
+        duration, max_duration = 0, 0
         for i in self.indices.tolist():
             sample_duration = self.data_source.duration(i)
             if (duration + sample_duration) > self.max_duration:
                 #print('batch', len(batch), duration)
                 yield batch
                 batch = []
-                duration = 0
+                duration, max_duration = 0, 0
             batch.append(i)
             # use max duration of the batch to account for padding
             max_duration = max(max_duration, sample_duration)
