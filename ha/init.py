@@ -17,6 +17,10 @@ from . import transformer
 from . import rnn
 
 
+def log(*args, flush=False, **kwargs):
+    print(*args, **kwargs, flush=flush, file=sys.stderr)
+
+
 @dataclass
 class GPTConfig:
     block_size: int = 1024
@@ -246,6 +250,46 @@ def create_model(arch: str, compile: bool = True):
     if compile:
         model = torch.compile(model)
     return model
+
+
+class Initializer:
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--init', type=Path, nargs='+', help="Path to checkpoint(s) to initialize from")
+        parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
+        parser.add_argument('--arch', type=str, default='transformer:512', help=create_model.__doc__)
+        parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
+        parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
+
+    def __call__(self, args, make_module = lambda x: x):
+        epoch, global_step = 0, 0
+        module = create_model(args.arch, compile=False).to(args.device)
+        module = make_module(module)
+
+        if args.init:
+            checkpoint = torch.load(args.init[0], map_location=args.device)
+            module.load_state_dict(checkpoint)
+            if len(args.init) > 1:
+                log('averaging models')
+                avg_model = torch.optim.swa_utils.AveragedModel(module)
+                for m in args.init[1:]:
+                    checkpoint = torch.load(m, map_location=args.device)
+                    module.load_state_dict(checkpoint)
+                    avg_model.update_parameters(module)
+                module = avg_model.module
+
+            if not args.reset:
+                epoch = checkpoint.get('epoch', -1) + 1
+                global_step = checkpoint.get('global_step', -1) + 1
+        else:
+            log('initializing randomly')
+
+        if args.compile:
+            module = torch.compile(module, mode='reduce-overhead')
+
+        log('model parameters', sum(p.numel() for p in module.parameters() if p.requires_grad))
+
+        return module, epoch, global_step
 
 
 @torch.inference_mode()

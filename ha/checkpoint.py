@@ -36,6 +36,10 @@ class Checkpointer:
             print(f'saving checkpoint to {str(path)}', flush=True)
             torch.save(checkpoint, str(path))
 
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--exp', type=Path, default='exp/haloop', help="Path to checkpoint directory")
+        parser.add_argument('--save', type=str, default='last+best', choices=['all', 'last+best', 'best', 'none'], help='What checkpoints to save after evaluation')
 
 def construct_path_suffix(
     config: Dict,

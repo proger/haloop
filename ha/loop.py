@@ -12,7 +12,7 @@ from kaldialign import edit_distance, align
 import wandb
 
 from .data import concat_datasets
-from .init import create_model
+from .init import create_model, log, Initializer
 from .recognizer import Decodable
 from . import symbol_tape
 from .monitor import register_activation_stat_hooks, print_activation_stat_hooks
@@ -20,12 +20,9 @@ from .optim import LR, configure_optimizers
 from .checkpoint import Checkpointer
 
 
-def log(*args, flush=False, **kwargs):
-    print(*args, **kwargs, flush=flush, file=sys.stderr)
-
 
 class Collator:
-    def __init__(self, vocab):
+    def __init__(self, vocab: symbol_tape.DictionaryLike):
         self.vocab = vocab
 
     def __call__(self, batch):
@@ -39,13 +36,19 @@ class Collator:
 
 
 class System(nn.Module):
-    def __init__(self, args, encoder, recognizer: Decodable):
+    def __init__(
+        self,
+        args,
+        encoder,
+        recognizer: Decodable,
+        vocab: symbol_tape.DictionaryLike
+    ):
         super().__init__()
         self.args = args
 
         self.encoder = encoder
         self.recognizer = recognizer
-        self.vocab = symbol_tape.make_vocab(args.vocab)
+        self.vocab = vocab
 
         self.optimizer = configure_optimizers(self, args, device_type='cuda', decay_lm_head=False)
         self.scaler = torch.cuda.amp.GradScaler()
@@ -147,7 +150,7 @@ class System(nn.Module):
                 loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
             except RuntimeError as e:
                 log(f'[{epoch}, {global_step:5d}]', 'OOM, data:', dataset_indices, 'total input frames:', input_lengths.sum().item(), flush=True)
-                if args.allow_oom:
+                if self.args.allow_oom:
                     continue
                 else:
                     raise e
@@ -325,16 +328,10 @@ def make_parser():
         pass
 
     parser = argparse.ArgumentParser(formatter_class=Formatter)
-    parser.add_argument('--init', type=Path, nargs='+', help="Path to checkpoint(s) to initialize from")
-    parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
-    parser.add_argument('--arch', type=str, default='transformer:512', help=create_model.__doc__)
+    Initializer.add_arguments(parser)
     parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|path/to/words.txt")
-    parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
-    parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
 
-    parser.add_argument('--exp', type=Path, default='exp/haloop', help="Path to checkpoint directory")
-    parser.add_argument('--save', type=str, default='last+best', choices=['all', 'last+best', 'best', 'none'], help='What checkpoints to save after evaluation')
-    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
+    Checkpointer.add_arguments(parser)
 
     parser.add_argument('--num-epochs', type=int, default=30, help="Number of epochs to train for")
     parser.add_argument('--batch-size', type=int, default=48, help="Batch size")
@@ -344,6 +341,7 @@ def make_parser():
     parser.add_argument('--entropy', action='store_true', help="Estimate decoder attention entropy at evaluation (slow)")
     parser.add_argument('--anomaly', action='store_true', help="Detect NaN/Inf during training")
     parser.add_argument('--allow-oom', action='store_true', help="Skip batches when OOM happens")
+    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
 
     LR.add_arguments(parser)
 
@@ -365,19 +363,19 @@ def make_parser():
     return parser
 
 
+
 def main():
     args = make_parser().parse_args()
     log(args)
 
     torch.manual_seed(args.seed)
 
-    models = create_model(args.arch, compile=False).to(args.device)
-    system = System(args, **models)
+    vocab = symbol_tape.make_vocab(args.vocab)
 
     if args.eval:
         valid_loader = torch.utils.data.DataLoader(
             concat_datasets(args.eval),
-            collate_fn=Collator(system.vocab),
+            collate_fn=Collator(vocab),
             batch_size=args.eval_batch_size,
             shuffle=False,
             num_workers=args.num_workers,
@@ -386,35 +384,13 @@ def main():
     if args.test:
         test_loader = torch.utils.data.DataLoader(
             concat_datasets(args.test),
-            collate_fn=Collator(system.vocab),
+            collate_fn=Collator(vocab),
             batch_size=args.eval_batch_size,
             shuffle=False,
             num_workers=args.num_workers,
         )
 
-    epoch, global_step = 0, 0
-    if args.init:
-        checkpoint = torch.load(args.init[0], map_location=args.device)
-        system.load_state_dict(checkpoint)
-        if len(args.init) > 1:
-            log('averaging models')
-            avg_model = torch.optim.swa_utils.AveragedModel(system)
-            for m in args.init[1:]:
-                checkpoint = torch.load(m, map_location=args.device)
-                system.load_state_dict(checkpoint)
-                avg_model.update_parameters(system)
-            system = avg_model.module
-
-        if not args.reset:
-            epoch = checkpoint.get('epoch', -1) + 1
-            global_step = checkpoint.get('global_step', -1) + 1
-    else:
-        log('initializing randomly')
-
-    if args.compile:
-        system = torch.compile(system, mode='reduce-overhead')
-
-    log('model parameters', sum(p.numel() for p in system.parameters() if p.requires_grad))
+    system, epoch, global_step = Initializer()(args, lambda model: System(args, vocab=vocab, **model))
 
     if args.train or args.wandb:
         wandb.init(project='ha', config=args, name=str(args.exp))
@@ -425,7 +401,7 @@ def main():
     if args.train:
         train_loader = torch.utils.data.DataLoader(
             concat_datasets(args.train),
-            collate_fn=Collator(system.vocab),
+            collate_fn=Collator(vocab),
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=args.num_workers,
@@ -459,7 +435,7 @@ def main():
         dataset = concat_datasets(args.grad_norms)
         egl_loader = torch.utils.data.DataLoader(
             dataset,
-            collate_fn=Collator(system.vocab),
+            collate_fn=Collator(vocab),
             batch_sampler=DurationBatchSampler(dataset, args.grad_norms_batch_duration),
             num_workers=args.num_workers,
         )

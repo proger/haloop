@@ -19,7 +19,7 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from . import lora
 from .checkpoint import construct_path_suffix, Checkpointer
-from .init import load_model
+from .init import load_model, Initializer
 from .mlm import mask_tokens
 from .optim import LR, configure_optimizers
 
@@ -30,16 +30,16 @@ class Formatter(argparse.ArgumentDefaultsHelpFormatter,
     pass
 
 parser = argparse.ArgumentParser(description="hala trains attention models", formatter_class=Formatter)
-parser.add_argument("--init", type=str, default="exp/uk4b_medium/medium_20230411.pt", help="Path to initial model")
-parser.add_argument("--save", type=str, default="exp/adapter.pt", help="Path to save checkpoints")
+Initializer.add_arguments(parser)
 parser.add_argument("--train", type=str, help="Path to training data")
 parser.add_argument("--eval", type=str, help="Path to validation data")
 parser.add_argument("--objective", choices=["lm", "denoise", "cond"], default="lm", type=str, help="lm: predict next token; denoise: predict masked tokens; cond: predict one last token in the sequence")
 parser.add_argument("--train-shuffle", action='store_true', help="If True, randomly samples batches from the training set")
 
+Checkpointer.add_arguments(parser)
+
 parser.add_argument("--eval-interval", type=int, default=100, help="Interval for evaluation")
 parser.add_argument("--log-interval", type=int, default=1, help="Interval for logging")
-parser.add_argument("--always_save_checkpoint", action="store_true", help="If True, always save a checkpoint after each evaluation")
 
 parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Number of gradient accumulation steps")
 parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
@@ -54,9 +54,7 @@ parser.add_argument("--lora", action="store_true", help="Train LoRA adapter")
 LR.add_arguments(parser)
 
 parser.add_argument("--backend", type=str, default="nccl", help="DDP backend")
-parser.add_argument("--device", type=str, default="cuda:1", help="Device for training")
 parser.add_argument("--dtype", type=str, default="bfloat16", help="Data type")
-parser.add_argument("--compile", action="store_true", help="Use PyTorch 2.0 to compile the model")
 parser.add_argument("--wandb", action="store_true", help="Enable wandb logging")
 
 args = parser.parse_args()
@@ -95,16 +93,7 @@ train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
 val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
 
 if master_process:
-    ckpt_suffix = construct_path_suffix(
-        vars(args),
-        vars(args),
-        always_include=["init", "learning_rate", "max_iters", "weight_decay", "beta1", "beta2", "grad_clip", "min_lr"],
-        always_ignore=["exp", "save", "train_bin", "valid_bin", "wandb_log", "wandb_project", "compile"],
-    )
-    ckpt_path = args.exp / f"{ckpt_path.stem}__{ckpt_suffix}{ckpt_path.suffix}"
-    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-    checkpoint = Checkpointer(path=ckpt_path, save=args.save)
-    print(f"Saving checkpoint to {ckpt_path}")
+    checkpoint = Checkpointer(path=args.exp, save=args.save)
 
 def get_batch(data: np.ndarray,
               step: int,
@@ -139,8 +128,8 @@ def get_batch(data: np.ndarray,
 
 iter_num = 0
 
-print(f"Loading model", args.init)
-model = load_model(args.init, map_location=device)
+initializer = Initializer()
+model, _, _ = initializer(args)
 model.train()
 
 assert args.block_size == model.config.block_size, "Block sizes don't match"
