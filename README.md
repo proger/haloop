@@ -6,8 +6,8 @@ Haloop is a speech agent toolkit. Haloop provides:
 
 - `hai` program to initialize models;
 - `hac` program for acoustic model training;
-- `hal` for RNN language model training and evaluation;
-- `hala` for causal attention model training;
+- `har` for RNN language model training and evaluation;
+- `hal` for causal attention model training;
 - `hat` for agent testing.
 
 The package can be installed from PyPI:
