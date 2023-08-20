@@ -18,10 +18,12 @@ class DurationBatchSampler(Sampler[list[int]]):
             # use max duration of the batch to account for padding
             new_max_duration = max(max_duration, sample_duration)
             if (len(batch) + 1) * new_max_duration > self.max_duration:
-                print('batch', len(batch), len(batch)*max_duration, file=sys.stderr)
+                #print('batch', len(batch), len(batch)*max_duration, file=sys.stderr)
                 yield batch
                 batch = [i]
                 max_duration = sample_duration
             else:
                 batch.append(i)
                 max_duration = new_max_duration
+        if batch:
+            yield batch
