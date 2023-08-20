@@ -148,7 +148,7 @@ class Block(nn.Module):
         return x, att_entropy, present
 
 
-class GPT(nn.Module):
+class Transformer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -175,11 +175,12 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
 
-    def forward_all(self,
-                    input_ids, # (B, T)
-                    target_ids, # (B, T)
-                    past=None # (nlayers, 2, B, nh, T, hs)
-                    ):
+    def forward(
+        self,
+        input_ids, # (B, T)
+        target_ids, # (B, T)
+        past=None # (nlayers, 2, B, nh, T, hs)
+    ):
         device = input_ids.device
         b, t = input_ids.size()
         if past is None:
@@ -202,6 +203,8 @@ class GPT(nn.Module):
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=0)
         return loss
 
+
+class GPT(Transformer):
     def forward_context(self, input_ids):
         device = input_ids.device
         b, t = input_ids.size()
@@ -222,10 +225,11 @@ class GPT(nn.Module):
 
         return x, present
 
-    def forward(self,
-                input_ids, # (B, T)
-                past=None # (nlayers, 2, B, nh, T, hs)
-                ):
+    def forward(
+        self,
+        input_ids, # (B, T)
+        past=None # (nlayers, 2, B, nh, T, hs)
+    ):
         device = input_ids.device
         b, t = input_ids.size()
         if past is None:
@@ -365,7 +369,7 @@ def main():
             case True:
                 # add eos token
                 start = [Tok.eos] + sp.encode(prompt)
-        
+
         readline.add_history(prompt)
         x = (torch.tensor(start, dtype=torch.long, device=device)[None, ...])
         t0 = time.time()

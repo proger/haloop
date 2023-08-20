@@ -106,11 +106,13 @@ def create_model(arch: str, compile: bool = True):
     """
     match arch.split(':'):
         case ['decoder']:
-            gptconf = GPTConfig()
-            model = GPT(gptconf)
+            from .attention import Transformer
+            gptconf = GPTConfig(block_size=1024, vocab_size=32768, n_layer=36, n_head=20, n_embd=1280, dropout=0.1)
+            model = Transformer(gptconf)
         case ['encoder']:
+            from .attention import Transformer
             gptconf = GPTConfig(block_size=128, causal=False)
-            model = GPT(gptconf)
+            model = Transformer(gptconf)
         case ['lstm']:
             model = rnn.Encoder()
         case ['rnnlm']:
@@ -254,14 +256,18 @@ def create_model(arch: str, compile: bool = True):
 
 class Initializer:
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser, default_arch='transformer:512'):
         parser.add_argument('--init', type=Path, nargs='+', help="Path to checkpoint(s) to initialize from")
         parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
-        parser.add_argument('--arch', type=str, default='transformer:512', help=create_model.__doc__)
+        parser.add_argument('--arch', type=str, default=default_arch, help=create_model.__doc__)
         parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
         parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
 
     def __call__(self, args, make_module = lambda x: x):
+        if 'xla' in args.device:
+            import torch_xla
+            import torch_xla.core.xla_model as xm
+
         epoch, global_step = 0, 0
         module = create_model(args.arch, compile=False).to(args.device)
         module = make_module(module)
