@@ -132,7 +132,7 @@ class Decoder(nn.Module, Decodable):
             memory=features.new_zeros((L, 2, N, heads, S, head_dim), dtype=torch.float16),
             time=features.new_zeros((L, 2, N, heads, T, head_dim), dtype=torch.float16),
         )
-        memory_empty = prompt.new_ones((N,), dtype=torch.bool)
+        memory_empty = prompt.new_ones((L,), dtype=torch.bool)
         alive = prompt.new_ones((N,), dtype=torch.bool)
         logits = features.new_zeros((N,))
 
