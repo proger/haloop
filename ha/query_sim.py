@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 import pandas as pd
 import sys
+from uk.subprocess import run, check_output
 
 parser = argparse.ArgumentParser(description="""Simulate dataset queries.
 
@@ -18,13 +19,13 @@ and the rest of the labels from the original dataset.
 """)
 parser.add_argument('--oracle', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.ref.txt.piece'),
                     help='dataset with true labels')
-parser.add_argument('--corrupted', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.dirty28538.txt.piece'),
-                    help='initial dataset with dirty labels')
 parser.add_argument('--query-size', type=int, default=2196,
                     help='number of utterances to query')
-parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
+parser.add_argument('--prev', type=Path, default=Path('exp/active/egl/03'),
                     help='experiment directory')
-parser.add_argument('--log', type=Path, default=Path(',18a09a848c2.3343822'),
+parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/04'),
+                    help='experiment directory')
+parser.add_argument('--log', type=Path, required=True,
                     help='log of the training run')
 
 def read_text(filename: Path):
@@ -56,23 +57,22 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     oracle = read_text(args.oracle)
-    corrupted = read_text(args.corrupted)
+    corrupted = read_text(args.prev / 'corrupted.txt.piece')
 
     train_hypotheses = training_log_to_dataset(args.log)
     grad_norms_dataset = train_hypotheses.join(corrupted)
     grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
 
     if not (args.exp / 'grads.txt').exists():
-        print('please compute gradient norms by running:', file=sys.stderr)
-        print(
-            'nq bash -c "hac',
+        print('computing gradient norms', file=sys.stderr)
+        check_output(' '.join([
+            'bash -c "hac',
             f'--grad-norms fbank:{args.exp / "hyp.txt.piece"}',
             '--device cuda:1',
-            '--init', args.exp / 'last.pt',
-            '--vocab exp/libribpe.vocab --compile | tee', args.exp / 'grads.txt',
+            '--init', str(args.exp / 'last.pt'),
+            '--vocab exp/libribpe.vocab --compile >', str(args.exp / 'grads.txt'),
             '"'
-        )
-        sys.exit(1)
+        ]), shell=True).strip().decode('utf-8')
 
     grad_norms_result = read_grads(args.exp / 'grads.txt')
 
@@ -100,6 +100,8 @@ if __name__ == '__main__':
 
     # Read true labels for the query from the oracle dataset
     oracle_query = oracle[oracle['media_filename'].isin(query.index)]
+    # Concat clean.txt.piece from previous experiments
+    oracle_query = pd.concat([read_text(args.prev / 'clean.txt.piece'), oracle_query])
 
     print('querying', len(query), 'clean utterances')
     oracle_query.to_csv(args.exp / 'clean.txt.piece', sep='\t', header=False, index=False)
@@ -109,25 +111,25 @@ if __name__ == '__main__':
     corrupted_rest = corrupted[~corrupted['media_filename'].isin(query.index)]
     corrupted_rest.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
+    print('writing combined dataset', file=sys.stderr)
+    combined_train = pd.concat([oracle_query, corrupted_rest])
+    combined_train.to_csv(args.exp / 'combined_train.txt.piece', sep='\t', header=False, index=False)
+
     next_exp = args.exp.parent / f'{int(args.exp.name) + 1:02}'
     prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
-    # TODO: concat clean.txt.piece from previous experiments
-    print(
-        'nq hac --train',
-        ','.join([prefix + file for prefix in prefixes for file in [
-            str(args.exp / 'clean.txt.piece'),
-            str(args.exp / 'corrupted.txt.piece'),
-        ]]),
-        '--eval fbank:data/corrupted-librispeech/dev-clean.txt.piece',
-        '--test-attempts 20',
-        f'--test fbank:{args.exp}/corrupted.txt.piece',
-        '--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --device cuda:1 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab exp/libribpe.vocab --weight_decay 0.1',
-        f'--exp {next_exp}',
-    )
+    run([
+        'hac',
+        '--train', ','.join([prefix + str(args.exp / 'combined_train.txt.piece') for prefix in prefixes]),
+        '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
+        '--test-attempts', '20',
+        '--test', f'fbank:{args.exp}/corrupted.txt.piece'
+        ] + '--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --device cuda:1 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab exp/libribpe.vocab --weight_decay 0.1'.split() + [
+        f'--exp', f'{next_exp}',
+    ])
     print(
         'python -m ha.query_sim',
         '--oracle', args.oracle,
-        '--corrupted', args.exp / 'corrupted.txt.piece',
+        '--prev', args.exp,
         '--exp', next_exp,
         '--log', '???',
     )
