@@ -39,7 +39,7 @@ def compute_grad_norm(self: MiniSystem, loader):
                 inputs,
                 targets,
                 input_lengths,
-                target_lengths.long() - 1,
+                target_lengths.long(),
             )
 
 

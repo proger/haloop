@@ -355,7 +355,7 @@ def make_parser():
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
 
     parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
-    parser.add_argument('--grad-norms-batch-duration', type=int, default=480, help="Batch duration in seconds for gradient norms computation")
+    parser.add_argument('--grad-norms-batch-duration', type=int, default=240, help="Batch duration in seconds for gradient norms computation")
 
     parser.add_argument('-q', '--quiet', action='store_true', help="Only print evaluation summary")
     parser.add_argument('--wandb', action='store_true', help="Unconditionally log to wandb")
