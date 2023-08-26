@@ -1,5 +1,6 @@
 from functools import wraps, reduce
 import time
+import shlex
 import subprocess
 from pathlib import Path
 from contextlib import ExitStack
@@ -11,12 +12,15 @@ def run(cmd, *args, output_filename: Path | None = None, **kwargs):
         if output_filename:
             kwargs['stdout'] = stack.enter_context(open(output_filename, 'w'))
             kwargs['stderr'] = subprocess.STDOUT
-            print('logging to', output_filename)
 
         if isinstance(cmd, str):
             cmd = [cmd]
             kwargs['shell'] = True
-        print('running', cmd)
+
+        if output_filename:
+            print(shlex.join(cmd), '>', output_filename)
+        else:
+            print(shlex.join(cmd))
         x = cmd[0]
         t0 = time.time()
         if not 'check' in kwargs:
@@ -26,7 +30,7 @@ def run(cmd, *args, output_filename: Path | None = None, **kwargs):
             return ret
         finally:
             t = time.time() - t0
-            print(x, 'took', t)
+            print('#', x, 'took', t)
 
 
 def sh(x, *args, **kwargs):
