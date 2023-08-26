@@ -57,7 +57,8 @@ def training_log_to_dataset(training_log_filename: Path):
             if decoding_train and line.startswith('12') and 'hyp' in line:
                 epoch, dataset_index, hypN, text = line.strip().split('\t')
                 assert epoch == "12" and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
-                train_hypotheses.append((int(dataset_index), text))
+                tokens = [token for token in text.split() if token != '␣']
+                train_hypotheses.append((int(dataset_index), ' '.join(tokens)))
             elif line.startswith('valid [12'):
                 decoding_train = True
                 continue
