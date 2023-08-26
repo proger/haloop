@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 import pandas as pd
 import sys
+import io
 from ha.subprocess import run
 
 parser = argparse.ArgumentParser(description="""Active learning on noisy labels.
@@ -38,7 +39,14 @@ def read_text(filename: Path):
         return pd.DataFrame([line.strip().split(maxsplit=1) for line in f], columns=['media_filename', 'text'])
 
 def read_grads(filename: Path):
-    return pd.read_csv(filename, sep='\t', header=None, names=['stub', 'dataset_index', 'grad_norm', 'loss'])
+    rows = []
+    with open(filename) as f:
+        for line in f:
+            if not line.startswith('grad_norm,loss'):
+                continue
+            stub, dataset_index, grad_norm, loss = line.strip().split('\t')
+            rows.append((int(dataset_index), float(grad_norm), float(loss)))
+    return pd.DataFrame(rows, columns=['dataset_index', 'grad_norm', 'loss']).set_index('dataset_index')
 
 def training_log_to_dataset(training_log_filename: Path):
     "reads output of hac using heuristics to extract the dataset"
@@ -68,9 +76,11 @@ if __name__ == '__main__':
         assert combined_train.exists(), f'{combined_train} does not exist'
         corrupted = read_text(args.prev / 'corrupted.txt.piece')
     else:
-        print('starting from scratch', file=sys.stderr)
+        print('# starting from scratch', file=sys.stderr)
         combined_train = args.initial_corrupted
         corrupted = read_text(args.initial_corrupted)
+
+    args.exp.mkdir(exist_ok=True, parents=True)
 
     if not (args.exp / 'last.pt').exists() or not (args.exp / 'train.log').exists():
         prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
@@ -92,7 +102,7 @@ if __name__ == '__main__':
     grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
 
     if not (args.exp / 'grads.txt').exists() or just_trained:
-        print('computing gradient norms', file=sys.stderr)
+        print('# computing gradient norms', file=sys.stderr)
         run([
             'hac',
             '--grad-norms', f'fbank:{args.exp / "hyp.txt.piece"}',
@@ -121,7 +131,7 @@ if __name__ == '__main__':
     egl.sort_values(ascending=False, inplace=True)
 
     egl.to_csv(args.exp / 'egl', sep='\t', header=False)
-    print('writing utterance scores to', args.exp / 'egl', file=sys.stderr)
+    print('# writing utterance scores to', args.exp / 'egl', file=sys.stderr)
 
     query = egl[:args.query_size]
 
@@ -131,21 +141,24 @@ if __name__ == '__main__':
         # Concat clean.txt.piece from previous experiments
         oracle_query = pd.concat([read_text(args.prev / 'clean.txt.piece'), oracle_query])
 
-    print('querying', len(query), 'clean utterances')
+    print('# querying', len(query), 'clean utterances')
     oracle_query.to_csv(args.exp / 'clean.txt.piece', sep='\t', header=False, index=False)
-    print('writing ', args.exp / 'clean.txt.piece', file=sys.stderr)
+    print('# writing', args.exp / 'clean.txt.piece', file=sys.stderr)
 
     # Read the rest of the labels from the original dataset
     corrupted_rest = corrupted[~corrupted['media_filename'].isin(query.index)]
     corrupted_rest.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
-    print('writing combined dataset', file=sys.stderr)
+    print('# writing combined dataset', file=sys.stderr)
     combined_train = pd.concat([oracle_query, corrupted_rest])
     combined_train.to_csv(args.exp / 'combined_train.txt.piece', sep='\t', header=False, index=False)
 
-    next_exp = args.exp.parent / f'{int(args.exp.name) + 1:02}'
-    print(
-        'python -m ha.query_sim',
-        '--prev', args.exp,
-        '--exp', next_exp,
-    )
+    try:
+        next_exp = args.exp.parent / f'{int(args.exp.name) + 1:02}'
+        print(
+            'python -m ha.active_loop',
+            '--prev', args.exp,
+            '--exp', next_exp,
+        )
+    except ValueError:
+        pass
