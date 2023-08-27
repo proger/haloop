@@ -330,6 +330,12 @@ class MultiHeadAttention(nn.Module):
 
             att_entropy = torch.tensor(float('-inf'))
         else:
+            if causal and mask is None:
+                # future tokens attend to the past: apply triangular mask
+                mask = ~k.new_ones(k.size(-2), k.size(-2), dtype=torch.bool).tril()
+                # account for cache shift
+                mask = mask[-T:]
+
             #x, att_entropy = attend_chunked(q, k, v, mask)
             x, att_entropy = attend(q, k, v, mask)
 
@@ -345,6 +351,7 @@ def attend_chunked(
     mask, # (N, ..., T, S) | None
     chunk_size=32
 ): # -> (N, heads, T, head_dim), stub
+    # XXX: this code is untested and probably has bugs
     x = torch.empty_like(q) # (N, heads, T, head_dim)
 
     q_chunks = q.split(chunk_size, dim=-2)

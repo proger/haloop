@@ -19,7 +19,9 @@ class MiniSystem(nn.Module):
 
     def forward(self, inputs, targets, input_lengths, target_lengths):
         features, feature_lengths, _ = self.encoder(inputs, input_lengths, measure_entropy=True)
-        loss, _ = self.recognizer(features, targets, feature_lengths, target_lengths, measure_entropy=True, drop_labels=False)
+        loss, _ = self.recognizer(features, targets, feature_lengths, target_lengths,
+                                  measure_entropy=True, # Batching rule not implemented for aten::_chunk_grad_outputs_efficient_attention
+                                  drop_labels=False)
         return loss
 
 
