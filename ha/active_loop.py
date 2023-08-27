@@ -34,9 +34,18 @@ parser.add_argument('--prev', type=Path, required=False,
 parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
                     help='experiment directory')
 
+def clean_tokens(text):
+    return ' '.join([token for token in text.split() if token != '␣'])
+
 def read_text(filename: Path):
+    def clean(key, text):
+        return key, clean_tokens(text)
+
     with open(filename) as f:
-        return pd.DataFrame([line.strip().split(maxsplit=1) for line in f], columns=['media_filename', 'text'])
+        return pd.DataFrame(
+            [clean(*line.strip().split(maxsplit=1)) for line in f],
+            columns=['media_filename', 'text']
+        )
 
 def read_grads(filename: Path):
     rows = []
@@ -57,8 +66,7 @@ def training_log_to_dataset(training_log_filename: Path):
             if decoding_train and line.startswith('12') and 'hyp' in line:
                 epoch, dataset_index, hypN, text = line.strip().split('\t')
                 assert epoch == "12" and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
-                tokens = [token for token in text.split() if token != '␣']
-                train_hypotheses.append((int(dataset_index), ' '.join(tokens)))
+                train_hypotheses.append((int(dataset_index), clean_tokens(text)))
             elif line.startswith('valid [12'):
                 decoding_train = True
                 continue

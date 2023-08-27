@@ -237,11 +237,9 @@ def create_model(arch: str, compile: bool = True):
                                           heads=config.n_head, p_drop=config.dropout, layers=12)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
         case ['e12d12', vocab_size]:
-            config = StridingAudioEncoderConfig(dropout=0.2, n_layer=12, n_head=8, n_embd=512, conv_strides=(2,2,1), vocab_size=int(vocab_size))
-            encoder = StridingAudioEncoder(config)
-            head_dim = config.n_embd // config.n_head
-            decoder = transformer.Decoder(vocab=config.vocab_size, head_dim=head_dim,
-                                          heads=config.n_head, p_drop=config.dropout, layers=12)
+            encoder = transformer.AudioEncoder(head_dim=64, heads=8, layers=12, p_drop=0.2)
+            decoder = transformer.Decoder(vocab=vocab_size, head_dim=64, heads=8,
+                                          p_drop=0.2, layers=12)
             model = nn.ModuleDict({'encoder': encoder, 'recognizer': decoder})
 
         case _:
