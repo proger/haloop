@@ -135,14 +135,18 @@ if __name__ == '__main__':
     ], axis=1)
 
     import numpy as np
-    from scipy.special import logsumexp
-    #
-    #    \log \sum_y ||\grad P(y|x)||**2 P(y|x)
-    # =  \log \sum_y exp(\log ||\grad P(y|x)||**2 - NLL(y|x))
-    #
-    grad_norms['product'] = np.log((grad_norms['grad_norm'] ** 2)) - grad_norms['loss']
 
-    egl = grad_norms.groupby('media_filename')['product'].apply(logsumexp)
+    #from scipy.special import logsumexp
+    # #
+    # #    \log \sum_y ||\grad P(y|x)||**2 P(y|x)
+    # # =  \log \sum_y exp(\log ||\grad P(y|x)||**2 - NLL(y|x))
+    # #
+    # grad_norms['product'] = np.log((grad_norms['grad_norm'] ** 2)) - grad_norms['loss']
+    # egl = grad_norms.groupby('media_filename')['product'].apply(logsumexp)
+
+    grad_norms['product'] = (grad_norms['grad_norm'] ** 2) * np.exp(-grad_norms['loss'])
+    egl = grad_norms.groupby('media_filename')['product'].apply(np.sum)
+
     egl.sort_values(ascending=False, inplace=True)
 
     egl.to_csv(args.exp / 'egl', sep='\t', header=False)
