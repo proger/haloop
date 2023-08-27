@@ -1,8 +1,7 @@
-import argparse
+from ha import argparse
 from pathlib import Path
 import pandas as pd
 import sys
-import io
 from ha.subprocess import run
 
 parser = argparse.ArgumentParser(description="""Active learning on noisy labels.
@@ -22,9 +21,11 @@ Based on largest EGL values, select a batch utterances to query.
 
 Then, fulfill the query by reading true labels from the oracle dataset
 and the rest of the labels from the original dataset.
-""")
+""", formatter_class=argparse.Formatter)
 parser.add_argument('--oracle', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.ref.txt.piece'),
                     help='dataset with true labels')
+parser.add_argument('--oracle-dirty', type=Path, default=Path('exp/active/mini-egl/onlydirty.txt.piece'),
+                    help='dataset with true dirty labels')
 parser.add_argument('--query-size', type=int, default=2196,
                     help='number of utterances to query')
 parser.add_argument('--initial-corrupted', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.dirty28538.txt.piece'),

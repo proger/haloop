@@ -1,4 +1,4 @@
-import argparse
+from ha import argparse
 import math
 from pathlib import Path
 
@@ -261,13 +261,8 @@ class System:
 
 
 def main():
-    class Formatter(argparse.ArgumentDefaultsHelpFormatter,
-                    argparse.MetavarTypeHelpFormatter,
-                    argparse.RawDescriptionHelpFormatter):
-        pass
-
     parser = argparse.ArgumentParser(description="hal trains recurrent language models",
-                                     formatter_class=Formatter, epilog="""\
+                                     formatter_class=argparse.Formatter, epilog="""\
 To produce 10-token completions of two strings try:
 % hal --init librispeech-1024.pt --rnn-size 1024 --bptt-len 10 --complete "IS THIS A BIRD" "IS THIS A PLANE"
 

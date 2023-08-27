@@ -1,4 +1,4 @@
-import argparse
+from ha import argparse
 from collections import Counter, defaultdict
 from itertools import chain, pairwise
 from pathlib import Path
@@ -326,11 +326,7 @@ class System(nn.Module):
 
 
 def make_parser():
-    class Formatter(argparse.ArgumentDefaultsHelpFormatter,
-                    argparse.MetavarTypeHelpFormatter):
-        pass
-
-    parser = argparse.ArgumentParser(formatter_class=Formatter)
+    parser = argparse.ArgumentParser(formatter_class=argparse.Formatter)
     Initializer.add_arguments(parser)
     parser.add_argument('--vocab', type=str, default='ascii', help="Vocabulary to use: bytes|ascii|cmu|xen|path/to/words.txt")
 
