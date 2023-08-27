@@ -149,7 +149,10 @@ class System(nn.Module):
             try:
                 loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
             except RuntimeError as e:
-                log(f'[{epoch}, {global_step:5d}]', 'OOM, data:', dataset_indices, 'total input frames:', input_lengths.sum().item(), flush=True)
+                log(f'[{epoch}, {global_step:5d}]', 'OOM, data:', dataset_indices,
+                    'total input frames:', input_lengths.sum().item(),
+                    'tokens:', target_lengths.sum().item(),
+                    flush=True)
                 if self.args.allow_oom:
                     continue
                 else:
