@@ -36,6 +36,8 @@ parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
                     help='experiment directory')
 parser.add_argument('--vocab', type=Path, default=Path('data/corrupted-librispeech/libribpe.vocab'),
                     help='vocab file')
+parser.add_argument('--device', type=str, default='cuda', help='device')
+
 
 def clean_tokens(text):
     return ' '.join([token for token in text.split() if token != '␣'])
@@ -102,8 +104,9 @@ if __name__ == '__main__':
             '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
             '--test-attempts', '20',
             '--test', f'fbank:{combined_train}'
-            ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --device cuda:1 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
+            ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
             '--exp', f'{args.exp}', '--allow-oom',
+            '--device', args.device,
         ], output_filename=args.exp / 'train.log')
         just_trained = True
     else:
@@ -118,7 +121,7 @@ if __name__ == '__main__':
         run([
             'hac',
             '--grad-norms', f'fbank:{args.exp / "hyp.txt.piece"}',
-            '--device', 'cuda:1',
+            '--device', args.device,
             '--init', str(args.exp / 'last.pt'),
             '--vocab', str(args.vocab), '--compile',
         ], output_filename=args.exp / 'grads.txt')

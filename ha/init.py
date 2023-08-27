@@ -257,7 +257,7 @@ class Initializer:
         parser.add_argument('--reset', action='store_true', help="Reset checkpoint epoch count (useful for LR scheduling)")
         parser.add_argument('--arch', type=str, default='transformer:512', help=create_model.__doc__)
         parser.add_argument('--compile', action='store_true', help="torch.compile the model (produces incompatible checkpoints)")
-        parser.add_argument('--device', type=str, default='cuda:1', help="torch device to use")
+        parser.add_argument('--device', type=str, default='cuda', help="torch device to use")
 
     def __call__(self, args, make_module = lambda x: x):
         epoch, global_step = 0, 0
