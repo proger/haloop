@@ -15,18 +15,18 @@ def test_gradient_norms():
     encoder = AudioEncoder(layers=1, head_dim=2, heads=1, input_dim=1, conv_dim=2, conv_strides=(1, 1))
     decoder = CTCAttentionDecoder(vocab=6, head_dim=encoder.head_dim, heads=encoder.heads, p_drop=0.1, layers=1)
 
-    encoder = encoder.to('cuda').to(torch.float16)
-    decoder = decoder.to('cuda').to(torch.float16)
+    encoder = encoder.to('cuda')
+    decoder = decoder.to('cuda')
     system = MiniSystem(encoder, decoder).eval()
 
-    N = 3
-    inputs = 100*torch.randn(N, 100, 1, device='cuda', dtype=torch.float16)
+    N = 128
+    inputs = 100*torch.randn(N, 100, 1, device='cuda')
     targets = torch.randint(0, 5, (N, 10), device='cuda', dtype=torch.long)
     input_lengths = torch.tensor([100]*N, device='cuda', dtype=torch.long)
     target_lengths = torch.tensor([10]*N, device='cuda', dtype=torch.long)
 
-    serial_grad_norms = torch.zeros(N, device='cuda', dtype=torch.float16)
-    serial_losses = torch.zeros(N, device='cuda', dtype=torch.float16)
+    serial_grad_norms = torch.zeros(N, device='cuda')
+    serial_losses = torch.zeros(N, device='cuda')
     for i in range(N):
         system.zero_grad()
         loss = system(inputs[i:i+1], targets[i:i+1], input_lengths[i:i+1], target_lengths[i:i+1])
@@ -39,6 +39,7 @@ def test_gradient_norms():
     parallel_grad_norms, parallel_losses = gradient_norms(system, inputs, targets, input_lengths, target_lengths)
     print('parallel_grad_norms', parallel_grad_norms)
     print('parallel_losses', parallel_losses)
+    print('  serial_losses', serial_losses)
 
     assert torch.allclose(
         parallel_grad_norms,
