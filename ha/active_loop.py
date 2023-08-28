@@ -88,11 +88,13 @@ if __name__ == '__main__':
     if args.prev:
         combined_train = args.prev / 'combined_train.txt.piece'
         assert combined_train.exists(), f'{combined_train} does not exist'
-        corrupted = read_text(args.prev / 'corrupted.txt.piece')
+        corrupted = args.prev / 'corrupted.txt.piece'
+        corrupted_dataset = read_text(args.prev / 'corrupted.txt.piece')
     else:
         print('# starting from scratch', file=sys.stderr)
         combined_train = args.initial_corrupted
-        corrupted = read_text(args.initial_corrupted)
+        corrupted = combined_train
+        corrupted_dataset = read_text(args.initial_corrupted)
 
     args.exp.mkdir(exist_ok=True, parents=True)
 
@@ -103,7 +105,7 @@ if __name__ == '__main__':
             '--train', ','.join([prefix + str(combined_train) for prefix in prefixes]),
             '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
             '--test-attempts', '20',
-            '--test', f'fbank:{combined_train}'
+            '--test', f'fbank:{corrupted}'
             ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
             '--exp', f'{args.exp}', '--allow-oom',
             '--device', args.device,
@@ -113,7 +115,7 @@ if __name__ == '__main__':
         just_trained = False
 
     train_hypotheses = training_log_to_dataset(args.exp / 'train.log')
-    grad_norms_dataset = train_hypotheses.join(corrupted)
+    grad_norms_dataset = train_hypotheses.join(corrupted_dataset)
     grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
 
     if not (args.exp / 'grads.txt').exists() or just_trained:
@@ -165,7 +167,7 @@ if __name__ == '__main__':
     print('# writing', args.exp / 'clean.txt.piece', file=sys.stderr)
 
     # Read the rest of the labels from the original dataset
-    corrupted_rest = corrupted[~corrupted['media_filename'].isin(query.index)]
+    corrupted_rest = corrupted_dataset[~corrupted_dataset['media_filename'].isin(query.index)]
     corrupted_rest.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
     print('# writing combined dataset', file=sys.stderr)
