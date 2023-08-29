@@ -7,7 +7,7 @@ from contextlib import ExitStack
 
 
 @wraps(subprocess.run)
-def run(cmd, *args, output_filename: Path | None = None, **kwargs):
+def run(cmd, *args, output_filename: Path | None = None, quiet=False, **kwargs):
     with ExitStack() as stack:
         if output_filename:
             kwargs['stdout'] = stack.enter_context(open(output_filename, 'w'))
@@ -17,10 +17,11 @@ def run(cmd, *args, output_filename: Path | None = None, **kwargs):
             cmd = [cmd]
             kwargs['shell'] = True
 
-        if output_filename:
-            print(shlex.join(cmd), '>', output_filename)
-        else:
-            print(shlex.join(cmd))
+        if not quiet:
+            if output_filename:
+                print(shlex.join(cmd), '>', output_filename, flush=True)
+            else:
+                print(shlex.join(cmd), flush=True)
         x = cmd[0]
         t0 = time.time()
         if not 'check' in kwargs:
@@ -30,7 +31,8 @@ def run(cmd, *args, output_filename: Path | None = None, **kwargs):
             return ret
         finally:
             t = time.time() - t0
-            print('#', x, 'took', t)
+            if not quiet:
+                print('#', x, 'took', t, flush=True)
 
 
 def sh(x, *args, **kwargs):
