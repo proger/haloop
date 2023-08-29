@@ -66,14 +66,16 @@ def training_log_to_dataset(training_log_filename: Path):
     "reads output of hac using heuristics to extract the dataset"
     train_hypotheses = []
     with open(training_log_filename) as f:
-        decoding_train = False
+        decoding_epoch = None
         for line in f:
-            if decoding_train and line.startswith('12') and 'hyp' in line:
+            if line.startswith('13'): # --train and --test were done separately
+                decoding_epoch = '13'
+            if decoding_epoch and line.startswith(decoding_epoch) and 'hyp' in line:
                 epoch, dataset_index, hypN, text = line.strip().split('\t')
-                assert epoch == "12" and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
+                assert epoch == decoding_epoch and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
                 train_hypotheses.append((int(dataset_index), clean_tokens(text)))
             elif line.startswith('valid [12'):
-                decoding_train = True
+                decoding_epoch = '12'
                 continue
     df = pd.DataFrame(train_hypotheses, columns=['dataset_index', 'hyp_text'])
     df.sort_values(by='dataset_index', ascending=True, inplace=True)
