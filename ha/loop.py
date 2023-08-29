@@ -206,7 +206,7 @@ class System(nn.Module):
         return global_step
 
     @torch.inference_mode()
-    def evaluate(self, epoch, loader, attempts=1):
+    def evaluate(self, epoch, loader, attempts=1, tag='valid'):
         valid_loss = 0.
         label_errors = Counter()
         word_errors = Counter()
@@ -255,12 +255,12 @@ class System(nn.Module):
         count = i + 1
         ler = round(label_errors['total'] / label_errors['length'], 3)
         wer = round(word_errors['total'] / word_errors['length'], 3)
-        log(f'valid [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f} wer: {wer:.3f}', flush=True)
+        log(f'{tag} [{epoch}, {i + 1:5d}] loss: {valid_loss / count:.3f} ler: {ler:.3f} wer: {wer:.3f}', flush=True)
         if attempts > 1:
             est_wer = round(est_word_errors['total'] / est_word_errors['length'], 3)
-            log(f'valid [{epoch}, {i + 1:5d}] estimated-wer: {est_wer:.3f} diff-wer: {wer - est_wer:.3f}', flush=True)
+            log(f'{tag} [{epoch}, {i + 1:5d}] estimated-wer: {est_wer:.3f} diff-wer: {wer - est_wer:.3f}', flush=True)
         if wandb.run is not None:
-            wandb.log({'valid/loss': valid_loss / count, 'valid/ler': ler, 'valid/wer': wer})
+            wandb.log({f'{tag}/loss': valid_loss / count, f'{tag}/ler': ler, f'{tag}/wer': wer})
         return valid_loss / count
 
     def estimate_wer(self, hypotheses):
@@ -413,17 +413,17 @@ def main():
 
         for epoch in range(epoch, args.num_epochs):
             global_step = system.train_one_epoch(epoch, global_step, train_loader, valid_loader)
-            valid_loss = system.evaluate(epoch, valid_loader)
+            valid_loss = system.evaluate(epoch, valid_loader, tag='valid')
             checkpoint(loss=valid_loss, epoch=epoch, checkpoint_fn=lambda: system.make_state_dict(**{
                 'best_valid_loss': valid_loss,
                 'epoch': epoch,
                 'global_step': global_step,
             }))
     elif args.eval:
-        system.evaluate(epoch, valid_loader)
+        system.evaluate(epoch, valid_loader, tag='valid')
 
     if args.test:
-        system.evaluate(epoch, test_loader, attempts=args.test_attempts)
+        system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='valid') # change to tag='test' later
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
