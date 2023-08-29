@@ -91,12 +91,12 @@ if __name__ == '__main__':
         combined_train = args.prev / 'combined_train.txt.piece'
         assert combined_train.exists(), f'{combined_train} does not exist'
         corrupted = args.prev / 'corrupted.txt.piece'
-        corrupted_dataset = read_text(args.prev / 'corrupted.txt.piece')
+        prev_corrupted_dataset = read_text(args.prev / 'corrupted.txt.piece')
     else:
         print('# starting from scratch', file=sys.stderr)
         combined_train = args.initial_corrupted
         corrupted = combined_train
-        corrupted_dataset = read_text(args.initial_corrupted)
+        prev_corrupted_dataset = read_text(args.initial_corrupted)
 
     args.exp.mkdir(exist_ok=True, parents=True)
 
@@ -117,22 +117,27 @@ if __name__ == '__main__':
         just_trained = False
 
     train_hypotheses = training_log_to_dataset(args.exp / 'train.log')
-    grad_norms_dataset = train_hypotheses.join(corrupted_dataset)
-    grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
+    grad_norms_dataset = train_hypotheses.join(prev_corrupted_dataset)
 
     if not (args.exp / 'grads.txt').exists() or just_trained:
+        print('# writing', args.exp / 'hyp.txt.piece', file=sys.stderr)
+        grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
         print('# computing gradient norms', file=sys.stderr)
         run([
             'hac',
             '--grad-norms', f'fbank:{args.exp / "hyp.txt.piece"}',
             '--device', args.device,
             '--init', str(args.exp / 'last.pt'),
-            '--vocab', str(args.vocab), '--compile',
+            '--vocab', str(args.vocab),
+            '--compile',
         ], output_filename=args.exp / 'grads.txt')
+    else:
+        print('# using existing', args.exp / 'grads.txt', file=sys.stderr)
+        run(["wc", "-l", args.exp / 'grads.txt'])
 
     grad_norms_result = read_grads(args.exp / 'grads.txt')
 
-    # Compute log-space EGL for each utterance
+    # Compute EGL for each utterance
     grad_norms = pd.concat([
         grad_norms_dataset.reset_index(),
         grad_norms_result
@@ -158,22 +163,37 @@ if __name__ == '__main__':
 
     query = egl[:args.query_size]
 
+    print('# querying', len(query), 'clean utterances')
+
     # Read true labels for the query from the oracle dataset
-    oracle_query = oracle[oracle['media_filename'].isin(query.index)]
+    oracle_query_result = oracle[oracle['media_filename'].isin(query.index)]
+    print('# writing', args.exp / 'query_result.txt.piece', file=sys.stderr)
+    oracle_query_result.to_csv(args.exp / 'query_result.txt.piece', sep='\t', header=False, index=False)
+
     if args.prev:
         # Concat clean.txt.piece from previous experiments
-        oracle_query = pd.concat([read_text(args.prev / 'clean.txt.piece'), oracle_query])
+        clean_train_dataset = pd.concat([read_text(args.prev / 'clean.txt.piece'), oracle_query_result])
+    else:
+        clean_train_dataset = oracle_query_result
 
-    print('# querying', len(query), 'clean utterances')
-    oracle_query.to_csv(args.exp / 'clean.txt.piece', sep='\t', header=False, index=False)
+    clean_train_dataset.to_csv(args.exp / 'clean.txt.piece', sep='\t', header=False, index=False)
     print('# writing', args.exp / 'clean.txt.piece', file=sys.stderr)
 
+    # compute WER between oracle query result and corrupted dataset
+    # TODO: rewrite using kaldialign
+    run([
+        "compute-wer",
+        "--mode=present",
+        f"ark:{args.exp}/query_result.txt.piece",
+        f"ark:{corrupted}",
+    ], quiet=True)
+
     # Read the rest of the labels from the original dataset
-    corrupted_rest = corrupted_dataset[~corrupted_dataset['media_filename'].isin(query.index)]
-    corrupted_rest.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
+    remaining_corrupted_dataset = prev_corrupted_dataset[~prev_corrupted_dataset['media_filename'].isin(query.index)]
+    remaining_corrupted_dataset.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
     print('# writing combined dataset', file=sys.stderr)
-    combined_train = pd.concat([oracle_query, corrupted_rest])
+    combined_train = pd.concat([clean_train_dataset, remaining_corrupted_dataset])
     combined_train.to_csv(args.exp / 'combined_train.txt.piece', sep='\t', header=False, index=False)
 
     try:
