@@ -39,7 +39,7 @@ parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
 parser.add_argument('--vocab', type=Path, default=Path('data/corrupted-librispeech/libribpe.vocab'),
                     help='vocab file')
 parser.add_argument('--device', type=str, default='cuda', help='device')
-parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer'], default='egl', help='query strategy')
+parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer', 'long'], default='egl', help='query strategy')
 
 def clean_tokens(text):
     return ' '.join([token for token in text.split() if token != '␣'])
@@ -134,6 +134,12 @@ if __name__ == '__main__':
             wer_df = compute_wer_pointwise(prev_corrupted_dataset, oracle)
             query = wer_df.sort_values('total', ascending=False).head(args.query_size)
             query = query.set_index('media_filename')
+        case 'long':
+            query = prev_corrupted_dataset
+            query['sizes'] = query['text'].str.count(' ') + 1
+            query = query.sort_values(by='sizes', ascending=False)
+            query = query.head(args.query_size)
+            query = query.set_index('media_filename')
         case 'egl':
             if not (args.exp / 'last.pt').exists() or not (args.exp / 'train.log').exists():
                 prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
@@ -168,7 +174,7 @@ if __name__ == '__main__':
                 ], output_filename=args.exp / 'grads.txt')
             else:
                 print('# using existing', args.exp / 'grads.txt', file=sys.stderr)
-                run(["wc", "-l", args.exp / 'grads.txt'])
+                run(["wc", "-l", str(args.exp / 'grads.txt')])
 
             grad_norms_result = read_grads(args.exp / 'grads.txt')
 
@@ -202,20 +208,24 @@ if __name__ == '__main__':
 
     # compute WER between oracle query result and corrupted dataset
     # TODO: rewrite using kaldialign
-    run([
-        "compute-wer",
-        "--mode=present",
-        f"ark:{args.exp}/query_result.txt.piece",
-        f"ark:{corrupted}",
-    ], quiet=True)
+    try:
+        run([
+            "compute-wer",
+            "--mode=present",
+            f"ark:{args.exp}/query_result.txt.piece",
+            f"ark:{corrupted}",
+        ], quiet=True)
+    except:
+        pass
 
     # Read the rest of the labels from the original dataset
     remaining_corrupted_dataset = prev_corrupted_dataset[~prev_corrupted_dataset['media_filename'].isin(query.index)]
     remaining_corrupted_dataset.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
     print('# writing combined dataset', file=sys.stderr)
+    combined_train_new_path = args.exp / 'combined_train.txt.piece'
     combined_train = pd.concat([clean_train_dataset, remaining_corrupted_dataset])
-    combined_train.to_csv(args.exp / 'combined_train.txt.piece', sep='\t', header=False, index=False)
+    combined_train.to_csv(combined_train_new_path, sep='\t', header=False, index=False)
 
     try:
         next_exp = args.exp.parent / f'{int(args.exp.name) + 1:02}'
@@ -226,3 +236,14 @@ if __name__ == '__main__':
         )
     except ValueError:
         pass
+
+    print('# you can train using:', file=sys.stderr)
+    prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
+    print(
+        'hac',
+        '--train', ','.join([prefix + str(combined_train_new_path) for prefix in prefixes]),
+        '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
+        '--exp', f'{args.exp}/post-query', '--allow-oom',
+        '--device', args.device,
+        *f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split())
+
