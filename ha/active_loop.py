@@ -135,7 +135,7 @@ if __name__ == '__main__':
             query = wer_df.sort_values('total', ascending=False).head(args.query_size)
             query = query.set_index('media_filename')
         case 'long':
-            query = prev_corrupted_dataset
+            query = prev_corrupted_dataset.copy()
             query['sizes'] = query['text'].str.count(' ') + 1
             query = query.sort_values(by='sizes', ascending=False)
             query = query[['media_filename', 'text']].head(args.query_size)
@@ -190,7 +190,7 @@ if __name__ == '__main__':
 
             query = egl[:args.query_size]
 
-    print('# querying', len(query), 'clean utterances')
+    print('# querying', len(query), 'clean utterances', file=sys.stderr)
 
     # Read true labels for the query from the oracle dataset
     oracle_query_result = oracle[oracle['media_filename'].isin(query.index)]
@@ -222,8 +222,8 @@ if __name__ == '__main__':
     remaining_corrupted_dataset = prev_corrupted_dataset[~prev_corrupted_dataset['media_filename'].isin(query.index)]
     remaining_corrupted_dataset.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
-    print('# writing combined dataset', file=sys.stderr)
     combined_train_new_path = args.exp / 'combined_train.txt.piece'
+    print('# writing combined dataset', combined_train_new_path, file=sys.stderr)
     combined_train = pd.concat([clean_train_dataset, remaining_corrupted_dataset])
     combined_train.to_csv(combined_train_new_path, sep='\t', header=False, index=False)
 
