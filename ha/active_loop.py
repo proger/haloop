@@ -39,7 +39,7 @@ parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
 parser.add_argument('--vocab', type=Path, default=Path('data/corrupted-librispeech/libribpe.vocab'),
                     help='vocab file')
 parser.add_argument('--device', type=str, default='cuda', help='device')
-parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer', 'long'], default='egl', help='query strategy')
+parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer', 'long', 'entropy', 'prob'], default='egl', help='query strategy')
 
 def clean_tokens(text):
     return ' '.join([token for token in text.split() if token != '␣'])
@@ -71,16 +71,35 @@ def training_log_to_dataset(training_log_filename: Path):
     with open(training_log_filename) as f:
         decoding_epoch = None
         for line in f:
-            if line.startswith('13'): # --train and --test were done separately
-                decoding_epoch = '13'
             if decoding_epoch and line.startswith(decoding_epoch) and 'hyp' in line:
                 epoch, dataset_index, hypN, text = line.strip().split('\t')
                 assert epoch == decoding_epoch and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
                 train_hypotheses.append((int(dataset_index), clean_tokens(text)))
+            elif line.startswith('testing'):
+                decoding_epoch = line.strip().split(maxsplit=1)[1]
+                continue
             elif line.startswith('valid [12'):
                 decoding_epoch = '12'
                 continue
     df = pd.DataFrame(train_hypotheses, columns=['dataset_index', 'hyp_text'])
+    df.sort_values(by='dataset_index', ascending=True, inplace=True)
+    return df.set_index('dataset_index')
+
+
+def test_log_to_dataset(test_log_filename: Path):
+    "reads output of hac using heuristics to extract the dataset with log probs and entropies"
+    hypotheses = []
+    with open(test_log_filename) as f:
+        decoding_epoch = None
+        for line in f:
+            if line.startswith('testing'):
+                decoding_epoch = line.strip().split(maxsplit=1)[1]
+            elif decoding_epoch and line.startswith(decoding_epoch) and 'stat' in line:
+                epoch, dataset_index, statN, text_stat = line.strip().split('\t')
+                assert epoch == decoding_epoch and statN.startswith('stat'), f"epoch={epoch}, statN={statN}"
+                stat = dict([kv.split('=') for kv in text_stat.split(' ')])
+                hypotheses.append((int(dataset_index), stat.get('log_prob_per_token'), stat.get('entropy_per_token')))
+    df = pd.DataFrame(hypotheses, columns=['dataset_index', 'log_prob_per_token', 'entropy_per_token'])
     df.sort_values(by='dataset_index', ascending=True, inplace=True)
     return df.set_index('dataset_index')
 
@@ -140,6 +159,50 @@ if __name__ == '__main__':
             query = query.sort_values(by='sizes', ascending=False)
             query = query[['media_filename', 'text']].head(args.query_size)
             query = query.set_index('media_filename')
+        case 'entropy':
+            if not (args.exp / 'entropy_prob/last.pt').exists() or not (args.exp / 'entropy_prob/train.log').exists():
+                prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
+                run([
+                    'hac', '--train', ','.join([prefix + str(combined_train) for prefix in prefixes]),
+                    '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
+                    '--test', f'fbank:{args.oracle}',
+                    ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
+                    '--exp', f'{args.exp}/entropy_prob', '--allow-oom',
+                    '--device', args.device,
+                ], output_filename=args.exp / 'entropy_prob/train.log')
+                just_trained = True
+            else:
+                just_trained = False
+
+            entropy_prob_df = test_log_to_dataset(args.exp / 'entropy_prob/train.log')
+            entropy_prob_df = pd.concat([
+                oracle,
+                entropy_prob_df
+            ], axis=1)
+            query = entropy_prob_df.sort_values('entropy_per_token', ascending=False)
+            query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
+        case 'prob':
+            if not (args.exp / 'entropy_prob/last.pt').exists() or not (args.exp / 'entropy_prob/train.log').exists():
+                prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
+                run([
+                    'hac', '--train', ','.join([prefix + str(combined_train) for prefix in prefixes]),
+                    '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
+                    '--test', f'fbank:{args.oracle}',
+                    ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
+                    '--exp', f'{args.exp}/entropy_prob', '--allow-oom',
+                    '--device', args.device,
+                ], output_filename=args.exp / 'entropy_prob/train.log')
+                just_trained = True
+            else:
+                just_trained = False
+
+            entropy_prob_df = pd.concat([
+                oracle,
+                test_log_to_dataset(args.exp / 'entropy_prob/train.log')
+            ], axis=1)
+            query = entropy_prob_df.sort_values('log_prob_per_token', ascending=False)
+            query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
+            print(query)
         case 'egl':
             if not (args.exp / 'last.pt').exists() or not (args.exp / 'train.log').exists():
                 prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']

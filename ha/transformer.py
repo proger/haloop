@@ -134,7 +134,8 @@ class Decoder(nn.Module, Decodable):
         )
         memory_empty = prompt.new_ones((L,), dtype=torch.bool)
         alive = prompt.new_ones((N,), dtype=torch.bool)
-        logits = features.new_zeros((N,))
+        log_probs = features.new_zeros((N,))
+        sum_entropies = features.new_zeros((N,))
 
         for t in range(T):
             # run one token at a time
@@ -158,18 +159,21 @@ class Decoder(nn.Module, Decodable):
                     t0=t,
                 )
 
-            step_logits = self.lm_head(self.ln_f(y[:, -1, :])).max(dim=-1)
+            step_logits = self.lm_head(self.ln_f(y[:, -1, :]))
+            step_logits = step_logits.log_softmax(dim=-1)
+            greedy_token = step_logits.max(dim=-1)
 
+            sum_entropies[alive] += (step_logits.exp() * step_logits / math.log(2)).sum(dim=(-2,-1))
             output_lengths[alive] += 1
-            logits[alive] += step_logits.values
-            tokens = step_logits.indices.long()
+            log_probs[alive] += greedy_token.values
+            tokens = greedy_token.indices.long()
             prompt[alive, t+1] = tokens
             alive_ = alive.clone()
             alive[alive_] = alive[alive_] & (tokens != etx)
 
         outputs = torch.nested.nested_tensor([p[1:l] for p, l in zip(prompt, output_lengths)])
         alignments = [None]*N
-        return outputs, output_lengths, alignments, logits
+        return outputs, output_lengths, alignments, log_probs, sum_entropies
         
 
 class AudioEncoder(nn.Module):

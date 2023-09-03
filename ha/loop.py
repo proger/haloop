@@ -231,15 +231,27 @@ class System(nn.Module):
 
             for attempt in range(attempts):
                 with torch.autocast(device_type='cuda', dtype=torch.float16):
-                    hypotheses, _, alignments, scores = self.recognizer.decode(features, feature_lengths, target_lengths)
+                    (
+                        hypotheses, output_lengths, alignments, log_probs, sum_entropies
+                    ) = self.recognizer.decode(features, feature_lengths, target_lengths)
 
                 valid_loss += loss.item()
 
-                for dataset_index, ref, ref_len, hyp_, ali_, feat_len in zip(
-                    dataset_indices, targets, target_lengths, hypotheses, alignments, feature_lengths
+                for (dataset_index,
+                     ref, ref_len, hyp_, hyp_len,
+                     ali_, feat_len,
+                     log_prob, sum_entropy) in zip(
+                    dataset_indices,
+                    targets, target_lengths, hypotheses, output_lengths,
+                    alignments, feature_lengths,
+                    log_probs, sum_entropies,
                 ):
                     k = dataset_index.item()
-                    label_error, word_error, hyp = self.print_example(k, ref, ref_len, hyp_, ali_, feat_len, epoch=epoch, attempt=attempt)
+                    label_error, word_error, hyp = self.print_example(
+                        k, ref, ref_len, hyp_, hyp_len, ali_, feat_len,
+                        log_prob, sum_entropy,
+                        epoch=epoch, attempt=attempt
+                    )
                     label_errors += label_error
                     word_errors += word_error
                     collected_hypotheses[k].append(hyp)
@@ -277,14 +289,21 @@ class System(nn.Module):
             est_wer[k] = errors / lengths
         return est_word_errors, est_wer
 
-    def print_example(self, dataset_index, ref, ref_len, hyp_, ali_, feat_len, epoch, attempt=0):
-        stat = {}
+    def print_example(self, dataset_index, ref, ref_len, hyp_, hyp_len, ali_, feat_len,
+                      log_prob, sum_entropy,
+                      epoch, attempt=0):
+        stat = {
+            'log_prob': round(log_prob.item(), 3),
+            'log_prob_per_token': round(log_prob.item()/hyp_len.item(), 3),
+            'entropy_per_token': round(-sum_entropy.item()/hyp_len.item(), 3),
+        }
         hyp = hyp_.cpu().tolist()
         ali = ali_[:feat_len].cpu().tolist() if ali_ is not None else []
         ref = ref[:ref_len].cpu().tolist()
 
         hyp1, hyp_words = self.vocab.decode(hyp)
         ref1, ref_words = self.vocab.decode(ref)
+        assert len(hyp1) == hyp_len.item() - 1 # hyp_len accounts for eos token
 
         stat |= edit_distance(hyp1, ref1)
         stat['length'] = len(ref1)
@@ -423,7 +442,8 @@ def main():
         system.evaluate(epoch, valid_loader, tag='valid')
 
     if args.test:
-        system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='valid') # change to tag='test' later
+        print('testing', epoch)
+        system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test')
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
