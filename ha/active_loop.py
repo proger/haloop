@@ -160,6 +160,7 @@ if __name__ == '__main__':
             query = query[['media_filename', 'text']].head(args.query_size)
             query = query.set_index('media_filename')
         case 'entropy':
+            (args.exp / 'entropy_prob').mkdir(exist_ok=True, parents=True)
             if not (args.exp / 'entropy_prob/last.pt').exists() or not (args.exp / 'entropy_prob/train.log').exists():
                 prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
                 run([
@@ -182,6 +183,7 @@ if __name__ == '__main__':
             query = entropy_prob_df.sort_values('entropy_per_token', ascending=False)
             query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'prob':
+            (args.exp / 'entropy_prob').mkdir(exist_ok=True, parents=True)
             if not (args.exp / 'entropy_prob/last.pt').exists() or not (args.exp / 'entropy_prob/train.log').exists():
                 prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
                 run([
