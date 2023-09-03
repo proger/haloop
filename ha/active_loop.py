@@ -138,7 +138,7 @@ if __name__ == '__main__':
             query = prev_corrupted_dataset
             query['sizes'] = query['text'].str.count(' ') + 1
             query = query.sort_values(by='sizes', ascending=False)
-            query = query.head(args.query_size)
+            query = query[['media_filename', 'text']].head(args.query_size)
             query = query.set_index('media_filename')
         case 'egl':
             if not (args.exp / 'last.pt').exists() or not (args.exp / 'train.log').exists():
