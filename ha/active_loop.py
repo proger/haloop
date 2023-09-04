@@ -171,16 +171,13 @@ if __name__ == '__main__':
                     '--exp', f'{args.exp}/entropy_prob', '--allow-oom',
                     '--device', args.device,
                 ], output_filename=args.exp / 'entropy_prob/train.log')
-                just_trained = True
-            else:
-                just_trained = False
 
             entropy_prob_df = test_log_to_dataset(args.exp / 'entropy_prob/train.log')
             entropy_prob_df = pd.concat([
                 oracle,
                 entropy_prob_df
             ], axis=1)
-            query = entropy_prob_df.sort_values('entropy_per_token', ascending=False)
+            query = entropy_prob_df.sort_values('entropy_per_token', key=lambda x: x.astype(float), ascending=False)
             query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'prob':
             (args.exp / 'entropy_prob').mkdir(exist_ok=True, parents=True)
@@ -194,17 +191,13 @@ if __name__ == '__main__':
                     '--exp', f'{args.exp}/entropy_prob', '--allow-oom',
                     '--device', args.device,
                 ], output_filename=args.exp / 'entropy_prob/train.log')
-                just_trained = True
-            else:
-                just_trained = False
 
             entropy_prob_df = pd.concat([
                 oracle,
                 test_log_to_dataset(args.exp / 'entropy_prob/train.log')
             ], axis=1)
-            query = entropy_prob_df.sort_values('log_prob_per_token', ascending=False)
+            query = entropy_prob_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
             query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
-            print(query)
         case 'egl':
             if not (args.exp / 'last.pt').exists() or not (args.exp / 'train.log').exists():
                 prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
