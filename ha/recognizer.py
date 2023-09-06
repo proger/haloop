@@ -17,16 +17,16 @@ class Decodable(Protocol):
         self,
         features: torch.Tensor, # (N, T, C)
         input_lengths: torch.LongTensor | None = None, # (N,)
-        target_lengths: torch.LongTensor | None = None, # (N,)
+        condtarget_lengths: torch.LongTensor | None = None, # (N,) # used a guide for how many tokens to decode
     ) -> tuple[torch.Tensor, torch.Tensor, list, torch.Tensor, torch.Tensor]: # sequences, lengths, alignments, scores, sum_entropies
         ...
 
     def forward(
         self,
         features: torch.Tensor, # (N, T, C)
-        targets: torch.Tensor, # (N, S)
+        condtargets: torch.Tensor, # (N, S)
         input_lengths: torch.LongTensor | None = None, # (N,)
-        target_lengths: torch.LongTensor | None = None, # (N,)
+        condtarget_lengths: torch.LongTensor | None = None, # (N,)
         star_penalty: float | None = None,
         measure_entropy: bool = False,
         drop_labels : bool = False

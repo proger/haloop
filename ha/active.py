@@ -17,9 +17,9 @@ class MiniSystem(nn.Module):
         else:
             self.recognizer = recognizer
 
-    def forward(self, inputs, targets, input_lengths, target_lengths):
+    def forward(self, inputs, condtargets, input_lengths, condtarget_lengths):
         features, feature_lengths, _ = self.encoder(inputs, input_lengths, measure_entropy=True)
-        loss, _ = self.recognizer(features, targets, feature_lengths, target_lengths,
+        loss, _ = self.recognizer(features, condtargets, feature_lengths, condtarget_lengths,
                                   measure_entropy=True, # Batching rule not implemented for aten::_chunk_grad_outputs_efficient_attention
                                   drop_labels=False)
         return loss
@@ -29,19 +29,19 @@ def compute_grad_norm(self: MiniSystem, loader):
     device = next(self.encoder.parameters()).device
 
     self.eval()
-    for dataset_indices, inputs, targets, input_lengths, target_lengths in loader:
+    for dataset_indices, inputs, condtargets, input_lengths, condtarget_lengths in loader:
         inputs = inputs.to(device) # (N, T, C)
         input_lengths = input_lengths.to(device) # (N,)
-        targets = targets.to(device) # (N, U)
-        target_lengths = target_lengths.to(device) # (N,)
+        condtargets = condtargets.to(device) # (N, U)
+        condtarget_lengths = condtarget_lengths.to(device) # (N,)
 
         with torch.autocast(device_type='cuda', dtype=torch.float16):
             norms, losses = gradient_norms(
                 self,
                 inputs,
-                targets,
+                condtargets,
                 input_lengths,
-                target_lengths.long(),
+                condtarget_lengths.long(),
             )
 
 
@@ -73,9 +73,9 @@ def norm_batched(x, p=2.0, eps=1e-6):
 def gradient_norms(
     system: MiniSystem,
     inputs: torch.Tensor, # (N, T, C)
-    targets: torch.Tensor, # (N, U)
+    condtargets: torch.Tensor, # (N, U)
     input_lengths: torch.Tensor, # (N,)
-    target_lengths: torch.Tensor # (N,)
+    condtarget_lengths: torch.Tensor # (N,)
 ) -> tuple[torch.Tensor, torch.Tensor]: # (N,), (N,)
     """Compute the gradient norms for each sample in the batch independently.
     Puts system into evaluation mode.
@@ -91,9 +91,9 @@ def gradient_norms(
 
     args = (
         inputs[:, None, :, :],
-        targets[:, None, :],
+        condtargets[:, None, :],
         input_lengths[:, None],
-        target_lengths[:, None],
+        condtarget_lengths[:, None],
     )
 
     tree, losses = per_sample_gradients(params, buffers, args)

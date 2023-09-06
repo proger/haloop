@@ -40,17 +40,21 @@ class CTCAttentionDecoder(nn.Module, Decodable):
 
     def forward(
         self,
-        features, targets, input_lengths=None, target_lengths=None,
+        features, condtargets, input_lengths=None, condtarget_lengths=None,
         star_penalty=None,
         measure_entropy=False,
         drop_labels=False,
     ):
-        decoder_loss, decoder_stats = self.decoder(features, targets, input_lengths, target_lengths, star_penalty, measure_entropy, drop_labels)
+        # remove prompts for CTC. we assume there is only one prompt token
+        targets = condtargets[:, 1:]
+        target_lengths = condtarget_lengths - 1 if condtarget_lengths is not None else None
+
+        decoder_loss, decoder_stats = self.decoder(features, condtargets, input_lengths, condtarget_lengths, star_penalty, measure_entropy, drop_labels)
         recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
         return decoder_loss + 0.3*recognizer_loss, {**decoder_stats, **recognizer_stats}
 
-    def decode(self, features, input_lengths, target_lengths):
-        return self.decoder.decode(features, input_lengths, target_lengths)
+    def decode(self, features, input_lengths, target_lengths, prompt=None):
+        return self.decoder.decode(features, input_lengths, target_lengths, prompt=prompt)
 
 
 class Decoder(nn.Module, Decodable):
@@ -113,7 +117,7 @@ class Decoder(nn.Module, Decodable):
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0, reduction='mean')
         return loss, stats._asdict()
 
-    def decode(self, features, input_lengths, target_lengths):
+    def decode(self, features, input_lengths, target_lengths, prompt=None):
         "Perform batched greedy decoding."
 
         N, S, _C = features.shape
@@ -122,8 +126,17 @@ class Decoder(nn.Module, Decodable):
         # make an inference prompt:
         # add <s> token to the beginning of each target sequence
         stx, etx = 2, 3 # <s>/BOS/␂ token
-        prompt = input_lengths.new_zeros((N, T+1), dtype=torch.long) + etx
-        prompt[:, 0] = stx
+        if prompt is None:
+            # construct a default <s> prompt
+            prompt = input_lengths.new_zeros((N, T+1), dtype=torch.long) + etx
+            prompt[:, 0] = stx
+        else:
+            # construct a default <s> prompt and prepend the given prompt
+            prompt_length = prompt.shape[-1]
+            prompt = input_lengths.new_zeros((N, T+1+prompt_length), dtype=torch.long) + etx
+            prompt[:, 0] = stx
+            prompt[:, 1:1+prompt_length] = prompt_length
+
         output_lengths = input_lengths.new_zeros((N,))
 
         L = len(self.h)

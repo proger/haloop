@@ -4,7 +4,8 @@ import pandas as pd
 import sys
 from ha.subprocess import run
 import numpy as np
-from kaldialign import edit_distance
+
+from .wer import compute_wer_pointwise, clean_tokens, read_text
 
 parser = argparse.ArgumentParser(description="""Active learning on noisy labels.
 
@@ -26,12 +27,14 @@ and the rest of the labels from the original dataset.
 """, formatter_class=argparse.Formatter)
 parser.add_argument('--oracle', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.ref.txt.piece'),
                     help='dataset with true labels')
-parser.add_argument('--oracle-dirty', type=Path, default=Path('exp/active/mini-egl/onlydirty.txt.piece'),
-                    help='dataset with true dirty labels')
+# parser.add_argument('--oracle-dirty', type=Path, default=Path('exp/active/mini-egl/onlydirty.txt.piece'),
+#                     help='dataset with true dirty labels')
 parser.add_argument('--query-size', type=int, default=2196,
                     help='number of utterances to query')
 parser.add_argument('--initial-corrupted', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.dirty28538.txt.piece'),
                     help='initial dataset with corrupted labels')
+parser.add_argument('--eval', type=Path, default=Path('data/corrupted-librispeech/dev-clean.txt.piece'),
+                    help='evaluation dataset')
 parser.add_argument('--prev', type=Path, required=False,
                     help='experiment directory')
 parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
@@ -39,20 +42,8 @@ parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
 parser.add_argument('--vocab', type=Path, default=Path('data/corrupted-librispeech/libribpe.vocab'),
                     help='vocab file')
 parser.add_argument('--device', type=str, default='cuda', help='device')
-parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer', 'long', 'entropy', 'prob'], default='egl', help='query strategy')
+parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer', 'long', 'entropy', 'prob', 'spin'], default='egl', help='query strategy')
 
-def clean_tokens(text):
-    return ' '.join([token for token in text.split() if token != '␣'])
-
-def read_text(filename: Path):
-    def clean(key, text):
-        return key, clean_tokens(text)
-
-    with open(filename) as f:
-        return pd.DataFrame(
-            [clean(*line.strip().split(maxsplit=1)) for line in f],
-            columns=['media_filename', 'text']
-        )
 
 def read_grads(filename: Path):
     rows = []
@@ -94,12 +85,15 @@ def test_log_to_dataset(test_log_filename: Path):
         for line in f:
             if line.startswith('testing'):
                 decoding_epoch = line.strip().split(maxsplit=1)[1]
-            elif decoding_epoch and line.startswith(decoding_epoch) and 'stat' in line:
+            elif decoding_epoch and line.startswith(decoding_epoch) and '\thyp' in line:
+                epoch, dataset_index, hypN, last_label = line.strip().split('\t')
+                assert epoch == decoding_epoch, f"epoch={epoch}"
+            elif decoding_epoch and line.startswith(decoding_epoch) and '\tstat' in line:
                 epoch, dataset_index, statN, text_stat = line.strip().split('\t')
-                assert epoch == decoding_epoch and statN.startswith('stat'), f"epoch={epoch}, statN={statN}"
+                assert epoch == decoding_epoch, f"epoch={epoch}"
                 stat = dict([kv.split('=') for kv in text_stat.split(' ')])
-                hypotheses.append((int(dataset_index), stat.get('log_prob_per_token'), stat.get('entropy_per_token')))
-    df = pd.DataFrame(hypotheses, columns=['dataset_index', 'log_prob_per_token', 'entropy_per_token'])
+                hypotheses.append((int(dataset_index), stat.get('log_prob_per_token'), stat.get('entropy_per_token'), stat.get('prompt', '<s>'), last_label))
+    df = pd.DataFrame(hypotheses, columns=['dataset_index', 'log_prob_per_token', 'entropy_per_token', 'prompt', 'text'])
     df.sort_values(by='dataset_index', ascending=True, inplace=True)
     return df.set_index('dataset_index')
 
@@ -122,12 +116,26 @@ def estimate_egl(
     return egl
 
 
-def compute_wer_pointwise(hyp_df, ref_df):
-    joint_df = hyp_df.merge(ref_df, on='media_filename', suffixes=('_hyp', '_ref'))
-    edits = joint_df.apply(lambda x: edit_distance(x['text_hyp'], x['text_ref']), axis=1, result_type='expand')
-    joint_df = joint_df.join(edits)
-    lengths = pd.DataFrame(joint_df.apply(lambda x: {'length': len(x['text_ref'].split())}, axis=1, result_type='expand'))
-    return joint_df.join(lengths)
+
+def train(root, train, eval, test, args, spin=False, test_attempts=1):
+    root.mkdir(exist_ok=True, parents=True)
+    if not (root / 'last.pt').exists() or not (root / 'train.log').exists():
+        prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
+        run([
+            'hac',
+            '--train', ','.join([f'{prefix}{train}' for prefix in prefixes]),
+            '--eval', f'fbank:{eval}',
+            '--test', f'fbank:{test}',
+            '--test-attempts', str(test_attempts),
+            ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
+            '--exp', str(root),# '--allow-oom'
+            ] + (["--test-spin-prompts", "--arch", "transformer:514"] if spin else []) + [
+            '--device', args.device,
+        ], output_filename=root / 'train.log')
+        just_trained = True
+    else:
+        just_trained = False
+    return just_trained
 
 
 if __name__ == '__main__':
@@ -160,17 +168,7 @@ if __name__ == '__main__':
             query = query[['media_filename', 'text']].head(args.query_size)
             query = query.set_index('media_filename')
         case 'entropy':
-            (args.exp / 'entropy_prob').mkdir(exist_ok=True, parents=True)
-            if not (args.exp / 'entropy_prob/last.pt').exists() or not (args.exp / 'entropy_prob/train.log').exists():
-                prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
-                run([
-                    'hac', '--train', ','.join([prefix + str(combined_train) for prefix in prefixes]),
-                    '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
-                    '--test', f'fbank:{args.oracle}',
-                    ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
-                    '--exp', f'{args.exp}/entropy_prob', '--allow-oom',
-                    '--device', args.device,
-                ], output_filename=args.exp / 'entropy_prob/train.log')
+            train(args.exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
 
             entropy_prob_df = test_log_to_dataset(args.exp / 'entropy_prob/train.log')
             entropy_prob_df = pd.concat([
@@ -178,42 +176,32 @@ if __name__ == '__main__':
                 entropy_prob_df
             ], axis=1)
             query = entropy_prob_df.sort_values('entropy_per_token', key=lambda x: x.astype(float), ascending=False)
+            print(query)
             query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'prob':
-            (args.exp / 'entropy_prob').mkdir(exist_ok=True, parents=True)
-            if not (args.exp / 'entropy_prob/last.pt').exists() or not (args.exp / 'entropy_prob/train.log').exists():
-                prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
-                run([
-                    'hac', '--train', ','.join([prefix + str(combined_train) for prefix in prefixes]),
-                    '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
-                    '--test', f'fbank:{args.oracle}',
-                    ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
-                    '--exp', f'{args.exp}/entropy_prob', '--allow-oom',
-                    '--device', args.device,
-                ], output_filename=args.exp / 'entropy_prob/train.log')
+            train(args.exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
 
             entropy_prob_df = pd.concat([
                 oracle,
                 test_log_to_dataset(args.exp / 'entropy_prob/train.log')
             ], axis=1)
             query = entropy_prob_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
+            print(query)
+            query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
+        case 'spin':
+            test = combined_train # TODO: test only on unknown items in the training set
+            train(args.exp / 'spin', combined_train, args.eval, combined_train, args, spin=True)
+
+            # order by log_prob_per_token under <↓> condition
+
+            spin_df = test_log_to_dataset(args.exp / 'spin/train.log')
+            spin_df = spin_df[spin_df['prompt'] == '<↓>']
+            spin_df = read_text(test).merge(spin_df, on='dataset_index')
+            query = spin_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
+            print(query)
             query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'egl':
-            if not (args.exp / 'last.pt').exists() or not (args.exp / 'train.log').exists():
-                prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
-                run([
-                    'hac',
-                    '--train', ','.join([prefix + str(combined_train) for prefix in prefixes]),
-                    '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
-                    '--test-attempts', '20',
-                    '--test', f'fbank:{corrupted}'
-                    ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
-                    '--exp', f'{args.exp}', '--allow-oom',
-                    '--device', args.device,
-                ], output_filename=args.exp / 'train.log')
-                just_trained = True
-            else:
-                just_trained = False
+            just_trained = train(args.exp, combined_train, args.eval, corrupted, args, test_attempts=20)
 
             train_hypotheses = training_log_to_dataset(args.exp / 'train.log')
             grad_norms_dataset = train_hypotheses.join(prev_corrupted_dataset)
@@ -255,6 +243,8 @@ if __name__ == '__main__':
     print('# writing', args.exp / 'query_result.txt.piece', file=sys.stderr)
     oracle_query_result.to_csv(args.exp / 'query_result.txt.piece', sep='\t', header=False, index=False)
 
+    # TODO: compare query results with corrupted labels and update the dataset to have correct labels
+
     if args.prev:
         # Concat clean.txt.piece from previous experiments
         clean_train_dataset = pd.concat([read_text(args.prev / 'clean.txt.piece'), oracle_query_result])
@@ -295,13 +285,14 @@ if __name__ == '__main__':
     except ValueError:
         pass
 
-    print('# you can train using:', file=sys.stderr)
-    prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
-    print(
-        'hac',
-        '--train', ','.join([prefix + str(combined_train_new_path) for prefix in prefixes]),
-        '--eval', 'fbank:data/corrupted-librispeech/dev-clean.txt.piece',
-        '--exp', f'{args.exp}/post-query', '--allow-oom',
-        '--device', args.device,
-        *f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split())
+    if False:
+        print('# you can train using:', file=sys.stderr)
+        prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
+        print(
+            'hac',
+            '--train', ','.join([prefix + str(combined_train_new_path) for prefix in prefixes]),
+            '--eval', f'fbank:{args.eval}',
+            '--exp', f'{args.exp}/post-query', '--allow-oom',
+            '--device', args.device,
+            *f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split())
 

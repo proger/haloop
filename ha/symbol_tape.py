@@ -9,7 +9,7 @@ from . import xen
 
 
 class DictionaryLike(Protocol):
-    def encode(self, text: str | bytes | list[int], extend_vocab=False) -> torch.LongTensor:
+    def encode(self, text: str | bytes | list[int], extend_vocab=False, prepend_sos=False) -> torch.LongTensor:
         ...
 
     def decode(self, ids: torch.LongTensor) -> tuple[str, str]:
@@ -142,8 +142,42 @@ class WordVocabulary(Vocabulary):
         else:
             return self.pad_id
 
+    def _padd(self, prompts):
+        match prompts:
+            case []: # no prompt: should only happen in dev-clean
+                return []
+            case [s]:
+                return [s]
+            case ["<↓>", _]:
+                return ["<↓>"]
+            case [_, "<↓>"]:
+                return ["<↓>"]
+            case ["<?>", _]:
+                return ["<?>"]
+            case [_, "<?>"]:
+                return ["<?>"]
+            case ["<↑>", "<↑>"]:
+                return ["<↑>"]
+        assert False, prompts
+
+    def _prompt_and_tokens(self, seq):
+        # deal with RandomPairs augmentation by joining two prompts into one
+        prompts, tokens = [], []
+        for i, s in enumerate(seq):
+            if s in ['<↓>', '<s>', '<↑>']:
+                prompts.append(s)
+            else:
+                tokens.append(s)
+        return prompts, tokens
+
+    def raw_encode(self, tok):
+        return self.get_idx(tok, extend_vocab=False)
+
     def encode(self, text, extend_vocab=False):
-        return torch.LongTensor([self.get_idx(char, extend_vocab=extend_vocab) for char in text.split()])
+        seq = text.split()
+        prompts, tokens = self._prompt_and_tokens(seq)
+        seq = self._padd(prompts) + tokens
+        return torch.LongTensor([self.get_idx(tok, extend_vocab=extend_vocab) for tok in seq])
 
     def decode(self, ids):
         labels = [self.id_to_string[id] for id in ids]

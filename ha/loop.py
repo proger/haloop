@@ -27,12 +27,18 @@ class Collator:
 
     def __call__(self, batch):
         batch_indices = torch.tensor([b[0] for b in batch])
-        input_lengths = torch.tensor([len(b[1]) for b in batch])
         inputs = torch.nn.utils.rnn.pad_sequence([b[1] for b in batch], batch_first=True)
-        targets = [self.vocab.encode(b[2]) for b in batch]
-        target_lengths = torch.tensor([len(t) for t in targets])
-        targets = torch.nn.utils.rnn.pad_sequence(targets, batch_first=True, padding_value=0)
-        return batch_indices, inputs, targets, input_lengths, target_lengths
+
+        # condtargets include all kinds of auxiliary labels, e.g. for the decoder
+        # currently we assume that first element of all condtargets is a prompt.
+        # we ignore prompts in the CTC head
+        condtargets = [self.vocab.encode(b[2]) for b in batch]
+
+        input_lengths = torch.tensor([len(b[1]) for b in batch])
+        condtarget_lengths = torch.tensor([len(t) for t in condtargets])
+
+        condtargets = torch.nn.utils.rnn.pad_sequence(condtargets, batch_first=True, padding_value=0)
+        return batch_indices, inputs, condtargets, input_lengths, condtarget_lengths
 
 
 class System(nn.Module):
@@ -104,13 +110,13 @@ class System(nn.Module):
             'loop_args': self.args,
         } | extra
 
-    def forward(self, inputs, targets, input_lengths, target_lengths, drop_labels=False):
+    def forward(self, inputs, condtargets, input_lengths, condtarget_lengths, drop_labels=False):
         device = next(self.encoder.parameters()).device
 
         inputs = inputs.to(device) # (N, T, C)
         input_lengths = input_lengths.to(device) # (N,)
-        targets = targets.to(device) # (N, U)
-        target_lengths = target_lengths.to(device) # (N,)
+        condtargets = condtargets.to(device) # (N, U)
+        condtarget_lengths = condtarget_lengths.to(device) # (N,)
 
         #log(inputs, targets) # works best with --batch-size 1
 
@@ -122,7 +128,7 @@ class System(nn.Module):
                 measure_entropy=measure_entropy
             )
             loss, stats = self.recognizer(
-                features, targets, feature_lengths, target_lengths,
+                features, condtargets, feature_lengths, condtarget_lengths,
                 star_penalty=self.args.star_penalty,
                 measure_entropy=measure_entropy,
                 drop_labels=drop_labels,
@@ -145,13 +151,13 @@ class System(nn.Module):
         local_step, accumulate = 0, 0
 
         self.train()
-        for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(train_loader):
+        for i, (dataset_indices, inputs, condtargets, input_lengths, condtarget_lengths) in enumerate(train_loader):
             try:
-                loss, _, _ = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=True)
+                loss, _, _ = self.forward(inputs, condtargets, input_lengths, condtarget_lengths, drop_labels=True)
             except RuntimeError as e:
                 log(f'[{epoch}, {global_step:5d}]', 'OOM, data:', dataset_indices,
                     'total input frames:', input_lengths.sum().item(),
-                    'tokens:', target_lengths.sum().item(),
+                    'tokens:', condtarget_lengths.sum().item(),
                     flush=True)
                 if self.args.allow_oom:
                     continue
@@ -206,7 +212,7 @@ class System(nn.Module):
         return global_step
 
     @torch.inference_mode()
-    def evaluate(self, epoch, loader, attempts=1, tag='valid'):
+    def evaluate(self, epoch, loader, attempts=1, tag='valid', prompts=[None]):
         valid_loss = 0.
         label_errors = Counter()
         word_errors = Counter()
@@ -219,8 +225,8 @@ class System(nn.Module):
 
         hook_handles = register_activation_stat_hooks(self)
 
-        for i, (dataset_indices, inputs, targets, input_lengths, target_lengths) in enumerate(loader):
-            loss, features, feature_lengths = self.forward(inputs, targets, input_lengths, target_lengths, drop_labels=False)
+        for i, (dataset_indices, inputs, condtargets, input_lengths, condtarget_lengths) in enumerate(loader):
+            loss, features, feature_lengths = self.forward(inputs, condtargets, input_lengths, condtarget_lengths, drop_labels=False)
             if i == 0:
                 #print_activation_stat_hooks(self)
                 for hook_handle in hook_handles:
@@ -229,33 +235,44 @@ class System(nn.Module):
             collected_hypotheses = defaultdict(list)
             gt_wer = {}
 
-            for attempt in range(attempts):
-                with torch.autocast(device_type='cuda', dtype=torch.float16):
-                    (
-                        hypotheses, output_lengths, alignments, log_probs, sum_entropies
-                    ) = self.recognizer.decode(features, feature_lengths, target_lengths)
+            for prompt in prompts:
+                if prompt is not None:
+                    prompt_tensor = torch.ones_like(feature_lengths)[:, None]*self.vocab.raw_encode(prompt)
+                else:
+                    prompt_tensor = None
 
-                valid_loss += loss.item()
+                for attempt in range(attempts):
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        (
+                            hypotheses, output_lengths, alignments, log_probs, sum_entropies
+                        ) = self.recognizer.decode(
+                            features,
+                            feature_lengths,
+                            condtarget_lengths,
+                            prompt=prompt_tensor
+                        )
 
-                for (dataset_index,
-                     ref, ref_len, hyp_, hyp_len,
-                     ali_, feat_len,
-                     log_prob, sum_entropy) in zip(
-                    dataset_indices,
-                    targets, target_lengths, hypotheses, output_lengths,
-                    alignments, feature_lengths,
-                    log_probs, sum_entropies,
-                ):
-                    k = dataset_index.item()
-                    label_error, word_error, hyp = self.print_example(
-                        k, ref, ref_len, hyp_, hyp_len, ali_, feat_len,
-                        log_prob, sum_entropy,
-                        epoch=epoch, attempt=attempt
-                    )
-                    label_errors += label_error
-                    word_errors += word_error
-                    collected_hypotheses[k].append(hyp)
-                    gt_wer[k] = word_error['total'] / word_error['length']
+                    valid_loss += loss.item()
+
+                    for (dataset_index,
+                        ref, ref_len, hyp_, hyp_len,
+                        ali_, feat_len,
+                        log_prob, sum_entropy) in zip(
+                        dataset_indices,
+                        condtargets, condtarget_lengths, hypotheses, output_lengths,
+                        alignments, feature_lengths,
+                        log_probs, sum_entropies,
+                    ):
+                        k = dataset_index.item()
+                        label_error, word_error, hyp = self.print_example(
+                            k, ref, ref_len, hyp_, hyp_len, ali_, feat_len,
+                            log_prob, sum_entropy,
+                            epoch=epoch, attempt=attempt, prompt=prompt
+                        )
+                        label_errors += label_error
+                        word_errors += word_error
+                        collected_hypotheses[k].append(hyp)
+                        gt_wer[k] = word_error['total'] / word_error['length']
 
             if attempts > 1:
                 e, est_wer = self.estimate_wer(collected_hypotheses)
@@ -291,11 +308,12 @@ class System(nn.Module):
 
     def print_example(self, dataset_index, ref, ref_len, hyp_, hyp_len, ali_, feat_len,
                       log_prob, sum_entropy,
-                      epoch, attempt=0):
+                      epoch, attempt=0, prompt=None):
         stat = {
             'log_prob': round(log_prob.item(), 3),
             'log_prob_per_token': round(log_prob.item()/hyp_len.item(), 3),
             'entropy_per_token': round(-sum_entropy.item()/hyp_len.item(), 3),
+            'prompt': prompt
         }
         hyp = hyp_.cpu().tolist()
         ali = ali_[:feat_len].cpu().tolist() if ali_ is not None else []
@@ -305,13 +323,14 @@ class System(nn.Module):
         ref1, ref_words = self.vocab.decode(ref)
         assert len(hyp1) == hyp_len.item() - 1 # hyp_len accounts for eos token
 
-        stat |= edit_distance(hyp1, ref1)
-        stat['length'] = len(ref1)
-        ler = stat['total'] / stat['length']
-        stat['ler'] = round(ler, 2)
-        label_error = Counter(stat)
+        dist = edit_distance(ref1, hyp1)
+        dist['length'] = len(ref1)
+        ler = dist['total'] / dist['length']
+        dist['ler'] = round(ler, 2)
+        label_error = Counter(dist)
+        stat |= dist
 
-        word_dist = edit_distance(hyp_words, ref_words)
+        word_dist = edit_distance(ref_words, hyp_words)
         word_dist['length'] = len(ref_words)
         wer = word_dist['total'] / word_dist['length']
         stat['wer'] = round(wer, 2)
@@ -371,6 +390,7 @@ def make_parser():
     parser.add_argument('--evaluate-every', type=int, default=10000, help="Evaluate every this many steps during the training epoch")
     parser.add_argument('--test', type=str, required=False, help="Datasets to run final evaluation (test) on, comma separated")
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
+    parser.add_argument('--test-spin-prompts', action='store_true', help="Prepend spin prompts (<↑>, <↓>) to test hypotheses")
 
     parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
     parser.add_argument('--grad-norms-batch-duration', type=int, default=240, help="Batch duration in seconds for gradient norms computation")
@@ -443,7 +463,10 @@ def main():
 
     if args.test:
         print('testing', epoch)
-        system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test')
+        if args.test_spin_prompts:
+            system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test', prompts=['<↑>', '<↓>'])
+        else:
+            system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test', prompts=[None])
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
