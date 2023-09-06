@@ -236,6 +236,7 @@ class System(nn.Module):
             gt_wer = {}
 
             for prompt in prompts:
+                # what is the log prob of the reference sentence given the prompt?
                 if prompt is not None:
                     prompt_tensor = torch.ones_like(feature_lengths)[:, None]*self.vocab.raw_encode(prompt)
                 else:

@@ -88,7 +88,8 @@ class Decoder(nn.Module, Decodable):
         # prompt2: STX a b c d
         # target1: a b c ETX PAD
         # target2: a b c d ETX
-        stx, etx = 2, 3
+        #stx, etx = 2, 3 # pre-spin
+        stx, etx = 3, 4 # spin
         prompt = F.pad(targets, (1, 0), value=stx) # (N, T+1)
         targets = F.pad(targets, (0, 1), value=0) # (N, T+1)
         targets[torch.arange(N, device=targets.device), target_lengths] = torch.LongTensor([etx]).to(targets.device)
@@ -125,7 +126,8 @@ class Decoder(nn.Module, Decodable):
 
         # make an inference prompt:
         # add <s> token to the beginning of each target sequence
-        stx, etx = 2, 3 # <s>/BOS/␂ token
+        #stx, etx = 2, 3 # <s>/BOS/␂ token # pre-spin
+        stx, etx = 3, 4 # spin
         if prompt is None:
             # construct a default <s> prompt
             prompt = input_lengths.new_zeros((N, T+1), dtype=torch.long) + etx
@@ -133,9 +135,10 @@ class Decoder(nn.Module, Decodable):
         else:
             # construct a default <s> prompt and prepend the given prompt
             prompt_length = prompt.shape[-1]
+            user_prompt = prompt
             prompt = input_lengths.new_zeros((N, T+1+prompt_length), dtype=torch.long) + etx
             prompt[:, 0] = stx
-            prompt[:, 1:1+prompt_length] = prompt_length
+            prompt[:, 1:1+prompt_length] = user_prompt
 
         output_lengths = input_lengths.new_zeros((N,))
 
