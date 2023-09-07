@@ -324,14 +324,14 @@ class System(nn.Module):
         ref1, ref_words = self.vocab.decode(ref)
         assert len(hyp1) == hyp_len.item() - 1 # hyp_len accounts for eos token
 
-        dist = edit_distance(ref1, hyp1)
+        dist = edit_distance(hyp1, ref1)
         dist['length'] = len(ref1)
         ler = dist['total'] / dist['length']
         dist['ler'] = round(ler, 2)
         label_error = Counter(dist)
         stat |= dist
 
-        word_dist = edit_distance(ref_words, hyp_words)
+        word_dist = edit_distance(hyp_words, ref_words)
         word_dist['length'] = len(ref_words)
         wer = word_dist['total'] / word_dist['length']
         stat['wer'] = round(wer, 2)
