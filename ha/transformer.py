@@ -130,6 +130,7 @@ class Decoder(nn.Module, Decodable):
             # construct a default <s> prompt
             prompt = input_lengths.new_zeros((N, T+1), dtype=torch.long) + etx
             prompt[:, 0] = stx
+            plen = 0
         else:
             # construct a default <s> prompt and prepend the given prompt
             prompt_length = prompt.shape[-1]
@@ -137,6 +138,7 @@ class Decoder(nn.Module, Decodable):
             prompt = input_lengths.new_zeros((N, T+1+prompt_length), dtype=torch.long) + etx
             prompt[:, 0] = stx
             prompt[:, 1:1+prompt_length] = user_prompt
+            plen = 1
 
         output_lengths = input_lengths.new_zeros((N,))
 
@@ -181,6 +183,9 @@ class Decoder(nn.Module, Decodable):
             output_lengths[alive] += 1
             log_probs[alive] += greedy_token.values
             tokens = greedy_token.indices.long()
+            if t < plen:
+                # use user prompt
+                tokens = prompt[alive, t+1]
             prompt[alive, t+1] = tokens
             alive_ = alive.clone()
             alive[alive_] = alive[alive_] & (tokens != etx)
