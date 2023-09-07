@@ -76,6 +76,7 @@ class Decoder(nn.Module, Decodable):
         star_penalty=None, # ignored
         measure_entropy=False,
         drop_labels=None,
+        reduction='mean',
     ):
         N, T = targets.shape
 
@@ -114,7 +115,7 @@ class Decoder(nn.Module, Decodable):
 
         logits = self.lm_head(self.ln_f(y)) # (N, T, V)
 
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0, reduction='mean')
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0, reduction=reduction)
         return loss, stats._asdict()
 
     def decode(self, features, input_lengths, target_lengths, prompt=None):

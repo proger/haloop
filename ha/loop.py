@@ -212,6 +212,37 @@ class System(nn.Module):
         return global_step
 
     @torch.inference_mode()
+    def score(self, epoch, loader, tag='score', prompts=["<↑>", "<↓>"]):
+        self.eval()
+
+        for i, (dataset_indices, inputs, condtargets1, input_lengths, condtarget_lengths) in enumerate(loader):
+            for prompt in prompts:
+                prompt_tensor = torch.ones(len(input_lengths), dtype=torch.long)[:, None]*self.vocab.raw_encode(prompt)
+                condtargets = torch.cat([prompt_tensor, condtargets1], dim=1)
+
+                device = next(self.encoder.parameters()).device
+
+                inputs = inputs.to(device) # (N, T, C)
+                input_lengths = input_lengths.to(device) # (N,)
+                condtargets = condtargets.to(device) # (N, U)
+                condtarget_lengths = condtarget_lengths.to(device) # (N,)
+
+                #with torch.autocast(device_type='cuda', dtype=torch.float16):
+                if True:
+                    features, feature_lengths, stats1 = self.encoder(
+                        inputs, input_lengths
+                    )
+                    loss, decoder_stats = self.recognizer.decoder(
+                        features, condtargets, input_lengths, condtarget_lengths,
+                        reduction='none'
+                    )
+                    #recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
+
+                for dataset_index, ref, ref_len, loss in zip(dataset_indices, condtargets, condtarget_lengths+1, loss):
+                    ref, _ = self.vocab.decode(ref[:ref_len].cpu().tolist())
+                    print(tag, dataset_index.item(), prompt, -loss.item(), self.vocab.format(ref), sep="\t", flush=True)
+
+    @torch.inference_mode()
     def evaluate(self, epoch, loader, attempts=1, tag='valid', prompts=[None]):
         valid_loss = 0.
         label_errors = Counter()
@@ -392,6 +423,7 @@ def make_parser():
     parser.add_argument('--test', type=str, required=False, help="Datasets to run final evaluation (test) on, comma separated")
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
     parser.add_argument('--test-spin-prompts', action='store_true', help="Prepend spin prompts (<↑>, <↓>) to test hypotheses")
+    parser.add_argument('--score', type=str, required=False, help="Datasets to run scoring on, comma separated")
 
     parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
     parser.add_argument('--grad-norms-batch-duration', type=int, default=240, help="Batch duration in seconds for gradient norms computation")
@@ -423,6 +455,15 @@ def main():
     if args.test:
         test_loader = torch.utils.data.DataLoader(
             concat_datasets(args.test),
+            collate_fn=Collator(vocab),
+            batch_size=args.eval_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+        )
+
+    if args.score:
+        score_loader = torch.utils.data.DataLoader(
+            concat_datasets(args.score),
             collate_fn=Collator(vocab),
             batch_size=args.eval_batch_size,
             shuffle=False,
@@ -468,6 +509,10 @@ def main():
             system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test', prompts=['<↑>', '<↓>'])
         else:
             system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test', prompts=[None])
+
+    if args.score:
+        print('scoring', epoch)
+        system.score(epoch, score_loader, tag='score', prompts=['<↑>', '<↓>'])
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
