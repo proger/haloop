@@ -209,6 +209,10 @@ class System(nn.Module):
                 self.evaluate(epoch, valid_loader, attempts=1)
                 self.train()
 
+            if lr == 0 and global_step > 10:
+                log(f'[{epoch}, {global_step:5d}] lr is zero, stopping', flush=True)
+                break
+
         return global_step
 
     @torch.inference_mode()
