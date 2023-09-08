@@ -350,8 +350,8 @@ class System(nn.Module):
                       log_prob, sum_entropy,
                       epoch, attempt=0, prompt=None):
         stat = {
-            'log_prob': round(log_prob.item(), 3),
-            'log_prob_per_token': round(log_prob.item()/hyp_len.item(), 3),
+            'log_prob': round(log_prob.item(), 4),
+            'log_prob_per_token': round(log_prob.item()/hyp_len.item(), 4),
             'entropy_per_token': round(-sum_entropy.item()/hyp_len.item(), 3),
             'prompt': prompt
         }

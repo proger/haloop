@@ -115,7 +115,10 @@ class Decoder(nn.Module, Decodable):
 
         logits = self.lm_head(self.ln_f(y)) # (N, T, V)
 
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0, reduction=reduction)
+        if reduction == 'sumeach':
+            loss = logits.log_softmax(dim=-1).max(dim=-1).values.sum(dim=-1)
+        else:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=0, reduction=reduction)
         return loss, stats._asdict()
 
     def decode(self, features, input_lengths, target_lengths, prompt=None):
