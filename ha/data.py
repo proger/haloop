@@ -232,7 +232,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--count', choices=['labels', 'frames'], default='labels')
+    parser.add_argument('--count', choices=['labels', 'frames', 'seconds'], default='labels', required=True)
     parser.add_argument('datasets')
     args = parser.parse_args()
 
@@ -241,12 +241,23 @@ if __name__ == '__main__':
     match args.count:
         case 'labels':
             stat = [len(text.split()) for index, frames, text in dataset]
+
+            unique_items, counts = torch.unique(torch.tensor(stat), sorted=True, return_counts=True)
+            max_count = counts.max()
+
+            for u, c in zip(unique_items.tolist(), counts.tolist()):
+                print(u, c, '▎' * (c * 50 // max_count), sep='\t')
         case 'frames':
             stat = [frames.shape[0] for index, frames, text in dataset]
 
-    unique_items, counts = torch.unique(torch.tensor(stat), sorted=True, return_counts=True)
-    max_count = counts.max()
+            unique_items, counts = torch.unique(torch.tensor(stat), sorted=True, return_counts=True)
+            max_count = counts.max()
 
-    for u, c in zip(unique_items.tolist(), counts.tolist()):
-        print(u, c, '▎' * (c * 50 // max_count), sep='\t')
+            for u, c in zip(unique_items.tolist(), counts.tolist()):
+                print(u, c, '▎' * (c * 50 // max_count), sep='\t')
+        case 'seconds':
+            for index, frames, text in dataset:
+                print(dataset.utt_id(index), dataset.duration(index), sep='\t')
+        case _:
+            raise ValueError(f'unknown --count {args.count}')
 
