@@ -92,8 +92,8 @@ def test_log_to_dataset(test_log_filename: Path):
                 epoch, dataset_index, statN, text_stat = line.strip().split('\t')
                 assert epoch == decoding_epoch, f"epoch={epoch}"
                 stat = dict([kv.split('=') for kv in text_stat.split(' ')])
-                hypotheses.append((int(dataset_index), stat.get('log_prob_per_token'), stat.get('entropy_per_token'), stat.get('prompt', '<s>'), last_label))
-    df = pd.DataFrame(hypotheses, columns=['dataset_index', 'log_prob_per_token', 'entropy_per_token', 'prompt', 'text'])
+                hypotheses.append((int(dataset_index), float(stat.get('log_prob')), float(stat.get('log_prob_per_token')), float(stat.get('entropy_per_token')), stat.get('prompt', '<s>'), last_label))
+    df = pd.DataFrame(hypotheses, columns=['dataset_index', 'log_prob', 'log_prob_per_token', 'entropy_per_token', 'prompt', 'text'])
     df.sort_values(by='dataset_index', ascending=True, inplace=True)
     return df.set_index('dataset_index')
 
