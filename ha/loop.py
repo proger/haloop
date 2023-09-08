@@ -428,6 +428,7 @@ def make_parser():
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
     parser.add_argument('--test-spin-prompts', action='store_true', help="Prepend spin prompts (<↑>, <↓>) to test hypotheses")
     parser.add_argument('--score', type=str, required=False, help="Datasets to run scoring on, comma separated")
+    parser.add_argument('--score-spin-prompts', action='store_true', help="Prepend spin prompts (<↑>, <↓>) to scoring hypotheses")
 
     parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
     parser.add_argument('--grad-norms-batch-duration', type=int, default=240, help="Batch duration in seconds for gradient norms computation")
@@ -516,7 +517,10 @@ def main():
 
     if args.score:
         print('scoring', epoch)
-        system.score(epoch, score_loader, tag='score', prompts=['<↑>', '<↓>'])
+        if args.score_spin_prompts:
+            system.score(epoch, score_loader, tag='score', prompts=['<↑>', '<↓>'])
+        else:
+            system.score(epoch, score_loader, tag='score', prompts=[None])
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
