@@ -219,36 +219,42 @@ class System(nn.Module):
     def score(self, epoch, loader, tag='score', prompts=["<↑>", "<↓>"]):
         self.eval()
 
-        for i, (dataset_indices, inputs, condtargets1, input_lengths, condtarget_lengths) in enumerate(loader):
+        for i, (dataset_indices, inputs, condtargets1, input_lengths, condtarget_lengths1) in enumerate(loader):
+            device = next(self.encoder.parameters()).device
+
+            inputs = inputs.to(device) # (N, T, C)
+            input_lengths = input_lengths.to(device) # (N,)
+
+            #with torch.autocast(device_type='cuda', dtype=torch.float16):
+            if True:
+                features, feature_lengths, stats1 = self.encoder(
+                    inputs, input_lengths
+                )
+
             for prompt in prompts:
                 if prompt is not None:
                     prompt_tensor = torch.ones(len(input_lengths), dtype=torch.long)[:, None]*self.vocab.raw_encode(prompt)
                     condtargets = torch.cat([prompt_tensor, condtargets1], dim=1)
+                    condtarget_lengths = condtarget_lengths1 + 1
                 else:
                     prompt_tensor = None
                     condtargets = condtargets1.clone()
+                    condtarget_lengths = condtarget_lengths1.clone()
 
-                device = next(self.encoder.parameters()).device
-
-                inputs = inputs.to(device) # (N, T, C)
-                input_lengths = input_lengths.to(device) # (N,)
                 condtargets = condtargets.to(device) # (N, U)
                 condtarget_lengths = condtarget_lengths.to(device) # (N,)
 
                 #with torch.autocast(device_type='cuda', dtype=torch.float16):
                 if True:
-                    features, feature_lengths, stats1 = self.encoder(
-                        inputs, input_lengths
-                    )
                     loss, decoder_stats = self.recognizer.decoder(
                         features, condtargets, input_lengths, condtarget_lengths,
-                        reduction='none'
+                        reduction='sumeach'
                     )
                     #recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
 
-                for dataset_index, ref, ref_len, loss in zip(dataset_indices, condtargets, condtarget_lengths+1, loss):
+                for dataset_index, ref, ref_len, loss in zip(dataset_indices, condtargets, condtarget_lengths, loss):
                     ref, _ = self.vocab.decode(ref[:ref_len].cpu().tolist())
-                    print(tag, dataset_index.item(), prompt, -loss.item(), self.vocab.format(ref), sep="\t", flush=True)
+                    print(tag, dataset_index.item(), prompt, loss.item(), self.vocab.format(ref), sep="\t", flush=True)
 
     @torch.inference_mode()
     def evaluate(self, epoch, loader, attempts=1, tag='valid', prompts=[None]):
