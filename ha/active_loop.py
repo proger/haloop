@@ -5,44 +5,36 @@ import sys
 from ha.subprocess import run
 import numpy as np
 
-from .wer import compute_wer_pointwise, clean_tokens, read_text
+from .wer import compute_wer_pointwise, clean_tokens, read_text, format_wer
 
-parser = argparse.ArgumentParser(description="""Active learning on noisy labels.
-
-Given a training set, train a model, and decode the training set to
-get multiple labels per utterance.
-
-Given a dataset with multiple labels per utterance, compute the gradient
-norm and loss value for each label-utterance pair.
-
-From a list of gradient norms and losses for each label-utterance pair,
-compute the expected gradient length (EGL) for each utterance:
-
-    EGL(x) = \sum_y P(y|x) ||\grad P(y|x)||**2
-
-Based on largest EGL values, select a batch utterances to query.
-
-Then, fulfill the query by reading true labels from the oracle dataset
-and the rest of the labels from the original dataset.
+parser = argparse.ArgumentParser(description="""Learning to improve supervision.
 """, formatter_class=argparse.Formatter)
-parser.add_argument('--oracle', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.ref.txt.piece'),
+parser.add_argument('--oracle', type=Path, default=Path('data/flaky/train-clean-100.ref.txt.piece'),
                     help='dataset with true labels')
 # parser.add_argument('--oracle-dirty', type=Path, default=Path('exp/active/mini-egl/onlydirty.txt.piece'),
 #                     help='dataset with true dirty labels')
-parser.add_argument('--query-size', type=int, default=2196,
-                    help='number of utterances to query')
-parser.add_argument('--initial-corrupted', type=Path, default=Path('data/corrupted-librispeech/train-clean-100.dirty28538.txt.piece'),
+parser.add_argument('--query-size', type=str, default='10h', # '2196'
+                    help='number of utterances or hours (with h at the end, like 10h) to query')
+parser.add_argument('--initial-corrupted', type=Path, default=Path('data/flaky/train-clean-100.dirty28538.txt.piece'),
                     help='initial dataset with corrupted labels')
-parser.add_argument('--eval', type=Path, default=Path('data/corrupted-librispeech/dev-clean.txt.piece'),
+parser.add_argument('--eval', type=Path, default=Path('data/flaky/dev-clean.txt.piece'),
                     help='evaluation dataset')
-parser.add_argument('--prev', type=Path, required=False,
-                    help='experiment directory')
-parser.add_argument('--exp', type=Path, default=Path('exp/active/egl/01'),
-                    help='experiment directory')
-parser.add_argument('--vocab', type=Path, default=Path('data/corrupted-librispeech/libribpe.vocab'),
+parser.add_argument('--vocab', type=Path, default=Path('data/flaky/libribpe.vocab'),
                     help='vocab file')
+parser.add_argument('--duration', type=Path, default=Path('data/flaky/train-clean-100.seconds'),
+                    help='duration file (filename TAB seconds)')
 parser.add_argument('--device', type=str, default='cuda', help='device')
-parser.add_argument('--strategy', type=str, choices=['egl', 'oracle-max-wer', 'long', 'entropy', 'prob', 'spin'], default='egl', help='query strategy')
+parser.add_argument('--strategy', type=str, choices=['random', 'egl', 'oracle-max-wer', 'long', 'entropy', 'prob', 'spin'], default='random', help='query strategy')
+parser.add_argument('--seed', type=int, default=42,
+                    help='random seed')
+
+# iteration parameters
+parser.add_argument('--start', type=int, default=0,
+                    help='start iteration')
+parser.add_argument('--steps', type=int, default=10,
+                    help='iterations to make since --start')
+parser.add_argument('--exp', type=Path, default=Path('exp/random'),
+                    help='experiment root for all iterations')
 
 
 def read_grads(filename: Path):
@@ -138,161 +130,208 @@ def train(root, train, eval, test, args, spin=False, test_attempts=1):
     return just_trained
 
 
-if __name__ == '__main__':
-    args = parser.parse_args()
-
-    oracle = read_text(args.oracle)
-
-    if args.prev:
-        combined_train = args.prev / 'combined_train.txt.piece'
-        assert combined_train.exists(), f'{combined_train} does not exist'
-        corrupted = args.prev / 'corrupted.txt.piece'
-        prev_corrupted_dataset = read_text(args.prev / 'corrupted.txt.piece')
+def perform_query(ranked_df, query_size: str):
+    if query_size.endswith('h'):
+        return query_hours(ranked_df, max_seconds=int(query_size[:-1]) * 60 * 60)
     else:
-        print('# starting from scratch', file=sys.stderr)
-        combined_train = args.initial_corrupted
-        corrupted = combined_train
+        return ranked_df.head(int(query_size))
+
+
+def query_hours(ranked_df, max_seconds=10*60*60):
+    end = 0
+    seconds = 0.
+    while end < len(ranked_df):
+        end += 1
+        seconds += ranked_df.iloc[end].seconds
+        if seconds > max_seconds:
+            break
+    return ranked_df.iloc[:end].set_index('media_filename')
+
+
+def perform_egl(args, exp, combined_train, corrupted, prev_corrupted_dataset):
+    """
+    Given a training set, train a model, and decode the training set to
+    get multiple labels per utterance.
+
+    Given a dataset with multiple labels per utterance, compute the gradient
+    norm and loss value for each label-utterance pair.
+
+    From a list of gradient norms and losses for each label-utterance pair,
+    compute the expected gradient length (EGL) for each utterance:
+
+        EGL(x) = \sum_y P(y|x) ||\grad P(y|x)||**2
+
+    Based on largest EGL values, select a batch utterances to query.
+
+    Then, fulfill the query by reading true labels from the oracle dataset
+    and the rest of the labels from the original dataset.
+    """
+    just_trained = train(exp, combined_train, args.eval, corrupted, args, test_attempts=20)
+
+    train_hypotheses = training_log_to_dataset(exp / 'train.log')
+    grad_norms_dataset = train_hypotheses.join(prev_corrupted_dataset)
+
+    if not (exp / 'grads.txt').exists() or just_trained:
+        print('# writing', exp / 'hyp.txt.piece', file=sys.stderr)
+        grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
+        print('# computing gradient norms', file=sys.stderr)
+        run([
+            'hac',
+            '--grad-norms', f'fbank:{exp / "hyp.txt.piece"}',
+            '--device', args.device,
+            '--init', str(exp / 'last.pt'),
+            '--vocab', str(args.vocab),
+            '--compile',
+        ], output_filename=exp / 'grads.txt')
+    else:
+        print('# using existing', exp / 'grads.txt', file=sys.stderr)
+        run(["wc", "-l", str(exp / 'grads.txt')])
+
+    grad_norms_result = read_grads(exp / 'grads.txt')
+
+    # Compute EGL for each utterance
+    grad_norms_df = pd.concat([
+        grad_norms_dataset.reset_index(),
+        grad_norms_result
+    ], axis=1)
+
+    query = estimate_egl(grad_norms_df)
+    query.to_csv(exp / 'egl', sep='\t', header=False)
+    print('# writing utterance scores to', exp / 'egl', file=sys.stderr)
+    return query
+
+
+def run_step(args, exp, *, prev=None):
+    oracle = read_text(args.oracle)
+    duration = pd.read_csv(args.duration, sep='\t', names=['media_filename', 'seconds'])
+
+    if prev is not None:
+        print('# continuing from', prev, 'in', exp, file=sys.stderr)
+
+        combined_train = prev / 'combined_train.txt.piece'
+        assert combined_train.exists(), f'{combined_train} does not exist'
+        corrupted = prev / 'corrupted.txt.piece'
+        prev_corrupted_dataset = read_text(corrupted)        
+    else:
+        print('# starting from scratch', exp, file=sys.stderr)
+        corrupted = combined_train = args.initial_corrupted
         prev_corrupted_dataset = read_text(args.initial_corrupted)
 
-    args.exp.mkdir(exist_ok=True, parents=True)
+    exp.mkdir(exist_ok=True, parents=True)
 
     match args.strategy:
+        case 'random':
+            query = prev_corrupted_dataset.sample(frac=1, replace=False, random_state=args.seed)
         case 'oracle-max-wer':
-            wer_df = compute_wer_pointwise(prev_corrupted_dataset, oracle)
-            query = wer_df.sort_values('total', ascending=False).head(args.query_size)
-            query = query.set_index('media_filename')
+            oracle_wer_df = compute_wer_pointwise(prev_corrupted_dataset, oracle)
+            oracle_wer_df['text'] = oracle_wer_df['text_ref']
+            query = oracle_wer_df.sort_values('total', ascending=False)
         case 'long':
             query = prev_corrupted_dataset.copy()
             query['sizes'] = query['text'].str.count(' ') + 1
             query = query.sort_values(by='sizes', ascending=False)
-            query = query[['media_filename', 'text']].head(args.query_size)
-            query = query.set_index('media_filename')
         case 'entropy':
-            train(args.exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
+            train(exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
 
-            entropy_prob_df = test_log_to_dataset(args.exp / 'entropy_prob/train.log')
+            entropy_prob_df = test_log_to_dataset(exp / 'entropy_prob/train.log')
             entropy_prob_df = pd.concat([
                 oracle,
                 entropy_prob_df
             ], axis=1)
             query = entropy_prob_df.sort_values('entropy_per_token', key=lambda x: x.astype(float), ascending=False)
-            print(query)
-            query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'prob':
-            train(args.exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
+            train(exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
 
             entropy_prob_df = pd.concat([
                 oracle,
-                test_log_to_dataset(args.exp / 'entropy_prob/train.log')
+                test_log_to_dataset(exp / 'entropy_prob/train.log')
             ], axis=1)
             query = entropy_prob_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
-            print(query)
-            query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'spin':
             test = combined_train # TODO: test only on unknown items in the training set
-            train(args.exp / 'spin', combined_train, args.eval, combined_train, args, spin=True)
+            train(exp / 'spin', combined_train, args.eval, combined_train, args, spin=True)
 
             # order by log_prob_per_token under <↓> condition
 
-            spin_df = test_log_to_dataset(args.exp / 'spin/train.log')
+            spin_df = test_log_to_dataset(exp / 'spin/train.log')
             spin_df = spin_df[spin_df['prompt'] == '<↓>']
             spin_df = read_text(test).merge(spin_df, on='dataset_index')
             query = spin_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
-            print(query)
-            query = query[['media_filename', 'text']].set_index('media_filename').head(args.query_size)
         case 'egl':
-            just_trained = train(args.exp, combined_train, args.eval, corrupted, args, test_attempts=20)
+            query = perform_egl(args, combined_train, corrupted, prev_corrupted_dataset)
 
-            train_hypotheses = training_log_to_dataset(args.exp / 'train.log')
-            grad_norms_dataset = train_hypotheses.join(prev_corrupted_dataset)
-
-            if not (args.exp / 'grads.txt').exists() or just_trained:
-                print('# writing', args.exp / 'hyp.txt.piece', file=sys.stderr)
-                grad_norms_dataset[['media_filename', 'hyp_text']].to_csv(args.exp / 'hyp.txt.piece', sep='\t', header=False, index=False)
-                print('# computing gradient norms', file=sys.stderr)
-                run([
-                    'hac',
-                    '--grad-norms', f'fbank:{args.exp / "hyp.txt.piece"}',
-                    '--device', args.device,
-                    '--init', str(args.exp / 'last.pt'),
-                    '--vocab', str(args.vocab),
-                    '--compile',
-                ], output_filename=args.exp / 'grads.txt')
-            else:
-                print('# using existing', args.exp / 'grads.txt', file=sys.stderr)
-                run(["wc", "-l", str(args.exp / 'grads.txt')])
-
-            grad_norms_result = read_grads(args.exp / 'grads.txt')
-
-            # Compute EGL for each utterance
-            grad_norms_df = pd.concat([
-                grad_norms_dataset.reset_index(),
-                grad_norms_result
-            ], axis=1)
-
-            egl = estimate_egl(grad_norms_df)
-            egl.to_csv(args.exp / 'egl', sep='\t', header=False)
-            print('# writing utterance scores to', args.exp / 'egl', file=sys.stderr)
-
-            query = egl[:args.query_size]
-
-    print('# querying', len(query), 'clean utterances', file=sys.stderr)
+    print(query)
+    query = query[['media_filename', 'text']]
+    query = query.set_index('media_filename')
+    query = query.merge(duration, on='media_filename')
+    query = perform_query(query, query_size=args.query_size)
+    print('# queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
+    assert len(query) > 0, "query size is zero, something is wrong"
+    assert len(query) < 10000, "query size is too large, something is wrong"
 
     # Read true labels for the query from the oracle dataset
     oracle_query_result = oracle[oracle['media_filename'].isin(query.index)]
-    print('# writing', args.exp / 'query_result.txt.piece', file=sys.stderr)
-    oracle_query_result.to_csv(args.exp / 'query_result.txt.piece', sep='\t', header=False, index=False)
+    print('# writing', exp / 'query_result.txt.piece', file=sys.stderr)
+    oracle_query_result.to_csv(exp / 'query_result.txt.piece', sep='\t', header=False, index=False)
 
-    # TODO: compare query results with corrupted labels and update the dataset to have correct labels
-
-    if args.prev:
+    if prev:
         # Concat clean.txt.piece from previous experiments
-        clean_train_dataset = pd.concat([read_text(args.prev / 'clean.txt.piece'), oracle_query_result])
+        clean_train_dataset = pd.concat([read_text(prev / 'clean.txt.piece'), oracle_query_result])
     else:
         clean_train_dataset = oracle_query_result
 
-    clean_train_dataset.to_csv(args.exp / 'clean.txt.piece', sep='\t', header=False, index=False)
-    print('# writing', args.exp / 'clean.txt.piece', file=sys.stderr)
+    clean_train_dataset.to_csv(exp / 'clean.txt.piece', sep='\t', header=False, index=False)
+    print('# writing', exp / 'clean.txt.piece', file=sys.stderr)
 
-    # compute WER between oracle query result and corrupted dataset
-    # TODO: rewrite using kaldialign
-    try:
-        run([
-            "compute-wer",
-            "--mode=present",
-            f"ark:{args.exp}/query_result.txt.piece",
-            f"ark:{corrupted}",
-        ], quiet=True)
-    except:
-        pass
+    print('# computing errors between oracle query result and previously corrupted dataset', file=sys.stderr)
+    ler_df = compute_wer_pointwise(
+        oracle_query_result[['media_filename', 'text']],
+        prev_corrupted_dataset[['media_filename', 'text']]
+    )
+    print(*format_wer(ler_df, tag='LER'), file=sys.stderr)
+    wer_df = compute_wer_pointwise(
+        oracle_query_result[['media_filename', 'text']],
+        prev_corrupted_dataset[['media_filename', 'text']],
+        join_bpe=True
+    )
+    print(*format_wer(wer_df), file=sys.stderr)
 
     # Read the rest of the labels from the original dataset
     remaining_corrupted_dataset = prev_corrupted_dataset[~prev_corrupted_dataset['media_filename'].isin(query.index)]
-    remaining_corrupted_dataset.to_csv(args.exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
+    remaining_corrupted_dataset.to_csv(exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
-    combined_train_new_path = args.exp / 'combined_train.txt.piece'
+    combined_train_new_path = exp / 'combined_train.txt.piece'
     print('# writing combined dataset', combined_train_new_path, file=sys.stderr)
     combined_train = pd.concat([clean_train_dataset, remaining_corrupted_dataset])
     combined_train.to_csv(combined_train_new_path, sep='\t', header=False, index=False)
 
-    try:
-        next_exp = args.exp.parent / f'{int(args.exp.name) + 1:02}'
-        print(
-            'python -m ha.active_loop',
-            '--prev', args.exp,
-            '--exp', next_exp,
-        )
-    except ValueError:
-        pass
+    print('# computing errors between new combined dataset and oracle', file=sys.stderr)
+    gler_df = compute_wer_pointwise(
+        combined_train[['media_filename', 'text']],
+        oracle
+    )
+    print(*format_wer(gler_df, tag='GLER'), file=sys.stderr)
 
-    if False:
-        print('# you can train using:', file=sys.stderr)
-        prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
-        print(
-            'hac',
-            '--train', ','.join([prefix + str(combined_train_new_path) for prefix in prefixes]),
-            '--eval', f'fbank:{args.eval}',
-            '--exp', f'{args.exp}/post-query', '--allow-oom',
-            '--device', args.device,
-            *f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split())
+    gwer_df = compute_wer_pointwise(
+        combined_train[['media_filename', 'text']],
+        oracle,
+        join_bpe=True
+    )
+    print(*format_wer(gwer_df, tag='GWER'), file=sys.stderr)
 
+
+def main():
+    args = parser.parse_args()
+    np.random.seed(args.seed)
+
+    for step in range(args.start, args.start+args.steps):
+        exp = args.exp / f'{step:02d}'
+        if step == 0:
+            run_step(args, exp)
+        else:
+            prev = args.exp / f'{step-1:02d}'
+            run_step(args, exp, prev=prev)
+
+
+if __name__ == '__main__':
+    main()

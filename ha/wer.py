@@ -15,18 +15,15 @@ def clean_and_join_tokens(text):
     return ''.join([token for token in text.split() if token != '␣']).replace('▁', ' ')
 
 
-def read_text(filename: Path, join_bpe: bool = False):
+def read_text(filename: Path):
     def clean(i, key, text):
-        if join_bpe:
-            return i, key, clean_and_join_tokens(text)
-        else:
-            return i, key, clean_tokens(text)
+        return i, key, clean_tokens(text)
 
     with open(filename) as f:
         return pd.DataFrame(
             [clean(i, *line.strip().split(maxsplit=1)) for i, line in enumerate(f)],
             columns=['dataset_index', 'media_filename', 'text']
-        )
+        ).set_index('dataset_index')
 
 def compute_alignment(hyp, ref):
     tags = []
@@ -55,13 +52,25 @@ def compute_alignment(hyp, ref):
     }
 
 
-def compute_wer_pointwise(ref_df, hyp_df):
-    joint_df = ref_df.merge(hyp_df, on='media_filename', suffixes=('_ref', '_hyp'))
-    lengths = pd.DataFrame(joint_df.apply(lambda x: {'ref_length': len(x['text_ref'].split())}, axis=1, result_type='expand'))
-    joint_df = joint_df.join(lengths)
-    edits = joint_df.apply(lambda x: compute_alignment(x['text_hyp'].split(), x['text_ref'].split()), axis=1, result_type='expand')
-    joint_df = joint_df.join(edits)
-    return joint_df
+def compute_wer_pointwise(ref_df, hyp_df, join_bpe=False):
+    clean = clean_and_join_tokens if join_bpe else clean_tokens
+
+    wer_df = ref_df.merge(hyp_df, on='media_filename', suffixes=('_ref', '_hyp'))
+    lengths = pd.DataFrame(wer_df.apply(lambda x: {'ref_length': len(clean(x['text_ref']).split())}, axis=1, result_type='expand'))
+    wer_df = wer_df.join(lengths)
+    edits = wer_df.apply(lambda x: compute_alignment(clean(x['text_hyp']).split(), clean(x['text_ref']).split()), axis=1, result_type='expand')
+    wer_df = wer_df.join(edits)
+
+    return wer_df
+
+
+def format_wer(wer_df, tag='WER'):
+    total = wer_df['total'].sum()
+    ref_length = wer_df['ref_length'].sum()
+    ins = wer_df['ins'].sum()
+    del_ = wer_df['del'].sum()
+    sub = wer_df['sub'].sum()    
+    return f'%{tag}', round(100 * total / ref_length, 2), f'errors={total}/{ref_length}', f'ins={ins}', f'del={del_}', f'sub={sub}'
 
 
 def main():
@@ -71,16 +80,11 @@ def main():
     parser.add_argument('hyp', type=Path, help='hyp')
     args = parser.parse_args()
 
-    ref_df = read_text(args.ref, join_bpe=args.words)
-    hyp_df = read_text(args.hyp, join_bpe=args.words)
-    joint_df = compute_wer_pointwise(ref_df, hyp_df)
-    joint_df.to_csv(sys.stdout, sep='\t', index=False)
-    total = joint_df['total'].sum()
-    ref_length = joint_df['ref_length'].sum()
-    ins = joint_df['ins'].sum()
-    del_ = joint_df['del'].sum()
-    sub = joint_df['sub'].sum()
-    print('%WER', round(100 * total / ref_length, 2), f'errors={total}/{ref_length}', f'ins={ins}', f'del={del_}', f'sub={sub}', file=sys.stderr)
+    ref_df = read_text(args.ref)
+    hyp_df = read_text(args.hyp)
+    wer_df = compute_wer_pointwise(ref_df, hyp_df, join_bpe=args.words)
+    wer_df.to_csv(sys.stdout, sep='\t', index=False)
+    print(*format_wer(wer_df), file=sys.stderr)
 
 
 if __name__ == '__main__':
