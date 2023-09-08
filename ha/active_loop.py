@@ -37,6 +37,8 @@ parser.add_argument('--steps', type=int, default=10,
                     help='iterations to make since --start')
 parser.add_argument('--exp', type=Path, default=Path('exp/random'),
                     help='experiment root for all iterations')
+parser.add_argument('--train', action='store_true',
+                    help='train the model after every query')
 
 
 def read_grads(filename: Path):
@@ -118,10 +120,10 @@ def train(root, train, eval, test, args, spin=False, test_attempts=1):
         run([
             'hac',
             '--train', ','.join([f'{prefix}{train}' for prefix in prefixes]),
-            '--eval', f'fbank:{eval}',
+            '--eval', f'fbank:{eval}', ] + ([
             '--test', f'fbank:{test}',
             '--test-attempts', str(test_attempts),
-            ] + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
+            ] if test else []) + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
             '--exp', str(root),# '--allow-oom'
             ] + (["--test-spin-prompts", "--arch", "transformer:514"] if spin else []) + [
             '--device', args.device,
@@ -203,7 +205,7 @@ def perform_egl(args, exp, combined_train, corrupted, prev_corrupted_dataset):
     return query
 
 
-def run_step(args, exp, *, prev=None):
+def run_step(args, exp, *, prev=None, is_final=False):
     oracle = read_text(args.oracle)
     duration = pd.read_csv(args.duration, sep='\t', names=['media_filename', 'seconds'])
 
@@ -277,8 +279,12 @@ def run_step(args, exp, *, prev=None):
     query = query[['media_filename', 'text']]
     query = query.set_index('media_filename')
     query = query.merge(duration, on='media_filename')
-    query = perform_query(query, query_size=args.query_size)
-    print('# queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
+    if is_final:
+        # take all remaining data
+        print('# final query. queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
+    else:
+        query = perform_query(query, query_size=args.query_size)
+        print('# queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
     assert len(query) > 0, "query size is zero, something is wrong"
     assert len(query) < 10000, "query size is too large, something is wrong"
 
@@ -332,6 +338,8 @@ def run_step(args, exp, *, prev=None):
     )
     print(*format_wer(gwer_df, tag='GWER'), file=sys.stderr)
 
+    return combined_train_new_path
+
 
 def main():
     args = parser.parse_args()
@@ -340,11 +348,13 @@ def main():
     for step in range(args.start, args.start+args.steps):
         exp = args.exp / f'{step:02d}'
         if step == 0:
-            run_step(args, exp)
+            train_path = run_step(args, exp)
         else:
             prev = args.exp / f'{step-1:02d}'
-            run_step(args, exp, prev=prev)
+            train_path = run_step(args, exp, prev=prev, is_final=step == args.start+args.steps-1)
 
+        if args.train:
+            train(exp / 'post', train=train_path, eval=args.eval, test=None, args=args)
 
 if __name__ == '__main__':
     main()
