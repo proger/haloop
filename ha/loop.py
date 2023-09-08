@@ -221,8 +221,12 @@ class System(nn.Module):
 
         for i, (dataset_indices, inputs, condtargets1, input_lengths, condtarget_lengths) in enumerate(loader):
             for prompt in prompts:
-                prompt_tensor = torch.ones(len(input_lengths), dtype=torch.long)[:, None]*self.vocab.raw_encode(prompt)
-                condtargets = torch.cat([prompt_tensor, condtargets1], dim=1)
+                if prompt is not None:
+                    prompt_tensor = torch.ones(len(input_lengths), dtype=torch.long)[:, None]*self.vocab.raw_encode(prompt)
+                    condtargets = torch.cat([prompt_tensor, condtargets1], dim=1)
+                else:
+                    prompt_tensor = None
+                    condtargets = condtargets1.clone()
 
                 device = next(self.encoder.parameters()).device
 
