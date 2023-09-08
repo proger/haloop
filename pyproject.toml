@@ -41,6 +41,7 @@ hai = "ha.init:main"
 har = "ha.rnnlm:main"
 hal = "ha.attention_loop:main"
 hat = "ha.attention:main"
+haw = "ha.wer:main"
 
 [tool.hatch.version]
 path = "ha/__about__.py"
