@@ -24,9 +24,11 @@ parser.add_argument('--vocab', type=Path, default=Path('data/flaky/libribpe.voca
 parser.add_argument('--duration', type=Path, default=Path('data/flaky/train-clean-100.seconds'),
                     help='duration file (filename TAB seconds)')
 parser.add_argument('--device', type=str, default='cuda', help='device')
-parser.add_argument('--strategy', type=str, choices=['random', 'egl', 'oracle-max-wer', 'long', 'entropy', 'prob', 'spin'], default='random', help='query strategy')
 parser.add_argument('--seed', type=int, default=42,
                     help='random seed')
+
+#parser.add_argument('--strategy', type=str, choices=['random', 'egl', 'oracle-max-wer', 'long', 'entropy', 'prob', 'spin'], default='random', help='query strategy')
+parser.add_argument('strategy', nargs='+', help='query strategy')
 
 # iteration parameters
 parser.add_argument('--start', type=int, default=0,
@@ -211,7 +213,7 @@ def run_step(args, exp, *, prev=None):
         combined_train = prev / 'combined_train.txt.piece'
         assert combined_train.exists(), f'{combined_train} does not exist'
         corrupted = prev / 'corrupted.txt.piece'
-        prev_corrupted_dataset = read_text(corrupted)        
+        prev_corrupted_dataset = read_text(corrupted)
     else:
         print('# starting from scratch', exp, file=sys.stderr)
         corrupted = combined_train = args.initial_corrupted
@@ -220,17 +222,17 @@ def run_step(args, exp, *, prev=None):
     exp.mkdir(exist_ok=True, parents=True)
 
     match args.strategy:
-        case 'random':
+        case ['random']:
             query = prev_corrupted_dataset.sample(frac=1, replace=False, random_state=args.seed)
-        case 'oracle-max-wer':
+        case ['oracle-max-wer']:
             oracle_wer_df = compute_wer_pointwise(prev_corrupted_dataset, oracle)
             oracle_wer_df['text'] = oracle_wer_df['text_ref']
             query = oracle_wer_df.sort_values('total', ascending=False)
-        case 'long':
+        case ['long']:
             query = prev_corrupted_dataset.copy()
             query['sizes'] = query['text'].str.count(' ') + 1
             query = query.sort_values(by='sizes', ascending=False)
-        case 'entropy':
+        case ['entropy']:
             train(exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
 
             entropy_prob_df = test_log_to_dataset(exp / 'entropy_prob/train.log')
@@ -239,7 +241,7 @@ def run_step(args, exp, *, prev=None):
                 entropy_prob_df
             ], axis=1)
             query = entropy_prob_df.sort_values('entropy_per_token', key=lambda x: x.astype(float), ascending=False)
-        case 'prob':
+        case ['prob']:
             train(exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
 
             entropy_prob_df = pd.concat([
@@ -247,7 +249,7 @@ def run_step(args, exp, *, prev=None):
                 test_log_to_dataset(exp / 'entropy_prob/train.log')
             ], axis=1)
             query = entropy_prob_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
-        case 'spin':
+        case ['spin']:
             test = combined_train # TODO: test only on unknown items in the training set
             train(exp / 'spin', combined_train, args.eval, combined_train, args, spin=True)
 
@@ -257,10 +259,21 @@ def run_step(args, exp, *, prev=None):
             spin_df = spin_df[spin_df['prompt'] == '<↓>']
             spin_df = read_text(test).merge(spin_df, on='dataset_index')
             query = spin_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
-        case 'egl':
+        case ['egl']:
             query = perform_egl(args, combined_train, corrupted, prev_corrupted_dataset)
+        case ['logfile', log_filename, test_dataset]:
+            # read utterance log probs from file
+            df = test_log_to_dataset(Path(log_filename))
+            df1 = df.groupby(df.index).log_prob.mean().rename('log_prob_mean')
+            df = read_text(Path(test_dataset)).merge(df1, on='dataset_index')
+            query = prev_corrupted_dataset.set_index('media_filename').merge(df.set_index('media_filename'), left_index=True, right_index=True)
+            query['text'] = query['text_x']
+            del query['text_x']
+            del query['text_y']
+            query = query.reset_index()
+            query = query.sort_values('log_prob_mean', key=lambda x: -x.astype(float), ascending=False)
 
-    print(query)
+    print(query, flush=True)
     query = query[['media_filename', 'text']]
     query = query.set_index('media_filename')
     query = query.merge(duration, on='media_filename')
