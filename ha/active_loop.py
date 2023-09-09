@@ -123,7 +123,7 @@ def train(root, train, eval, test, args, spin=False, test_attempts=1):
             '--eval', f'fbank:{eval}', ] + ([
             '--test', f'fbank:{test}',
             '--test-attempts', str(test_attempts),
-            ] if test else []) + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 48 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
+            ] if test else []) + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 24 --accumulate 2 --lr 0.0006 --min_lr 0 --eval-batch-size 1024 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
             '--exp', str(root),# '--allow-oom'
             ] + (["--test-spin-prompts", "--arch", "transformer:514"] if spin else []) + [
             '--device', args.device,
@@ -281,6 +281,7 @@ def run_step(args, exp, *, prev=None, is_final=False):
     query = query.merge(duration, on='media_filename')
     if is_final:
         # take all remaining data
+        query = query.set_index('media_filename')
         print('# final query. queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
     else:
         query = perform_query(query, query_size=args.query_size)
