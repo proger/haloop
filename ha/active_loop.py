@@ -27,8 +27,7 @@ parser.add_argument('--device', type=str, default='cuda', help='device')
 parser.add_argument('--seed', type=int, default=42,
                     help='random seed')
 
-#parser.add_argument('--strategy', type=str, choices=['random', 'egl', 'oracle-max-wer', 'long', 'entropy', 'prob', 'spin'], default='random', help='query strategy')
-parser.add_argument('strategy', nargs='+', help='query strategy')
+parser.add_argument('strategy', type=str, nargs='+', help='query strategy (random, egl, oracle-max-wer, long, entropy, prob, spin, logfile <log_filename> <test_dataset>))')
 
 # iteration parameters
 parser.add_argument('--start', type=int, default=0,
