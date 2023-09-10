@@ -216,8 +216,11 @@ class System(nn.Module):
         return global_step
 
     @torch.inference_mode()
-    def score(self, epoch, loader, tag='score', prompts=["<↑>", "<↓>"]):
-        self.eval()
+    def score(self, epoch, loader, tag='score', prompts=["<↑>", "<↓>"], attempts=1):
+        if attempts > 1:
+            self.train()
+        else:
+            self.eval()
 
         for i, (dataset_indices, inputs, condtargets1, input_lengths, condtarget_lengths1) in enumerate(loader):
             device = next(self.encoder.parameters()).device
@@ -231,30 +234,31 @@ class System(nn.Module):
                     inputs, input_lengths
                 )
 
-            for prompt in prompts:
-                if prompt is not None:
-                    prompt_tensor = torch.ones(len(input_lengths), dtype=torch.long)[:, None]*self.vocab.raw_encode(prompt)
-                    condtargets = torch.cat([prompt_tensor, condtargets1], dim=1)
-                    condtarget_lengths = condtarget_lengths1 + 1
-                else:
-                    prompt_tensor = None
-                    condtargets = condtargets1.clone()
-                    condtarget_lengths = condtarget_lengths1.clone()
+            for _ in range(attempts):
+                for prompt in prompts:
+                    if prompt is not None:
+                        prompt_tensor = torch.ones(len(input_lengths), dtype=torch.long)[:, None]*self.vocab.raw_encode(prompt)
+                        condtargets = torch.cat([prompt_tensor, condtargets1], dim=1)
+                        condtarget_lengths = condtarget_lengths1 + 1
+                    else:
+                        prompt_tensor = None
+                        condtargets = condtargets1.clone()
+                        condtarget_lengths = condtarget_lengths1.clone()
 
-                condtargets = condtargets.to(device) # (N, U)
-                condtarget_lengths = condtarget_lengths.to(device) # (N,)
+                    condtargets = condtargets.to(device) # (N, U)
+                    condtarget_lengths = condtarget_lengths.to(device) # (N,)
 
-                #with torch.autocast(device_type='cuda', dtype=torch.float16):
-                if True:
-                    loss, decoder_stats = self.recognizer.decoder(
-                        features, condtargets, input_lengths, condtarget_lengths,
-                        reduction='sumeach'
-                    )
-                    #recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
+                    #with torch.autocast(device_type='cuda', dtype=torch.float16):
+                    if True:
+                        loss, decoder_stats = self.recognizer.decoder(
+                            features, condtargets, input_lengths, condtarget_lengths,
+                            reduction='sumeach', drop_labels=False
+                        )
+                        #recognizer_loss, recognizer_stats = self.recognizer(features, targets, input_lengths, target_lengths, star_penalty)
 
-                for dataset_index, ref, ref_len, loss in zip(dataset_indices, condtargets, condtarget_lengths, loss):
-                    ref, _ = self.vocab.decode(ref[:ref_len].cpu().tolist())
-                    print(tag, dataset_index.item(), prompt, loss.item(), self.vocab.format(ref), sep="\t", flush=True)
+                    for dataset_index, ref, ref_len, loss in zip(dataset_indices, condtargets, condtarget_lengths, loss):
+                        ref, _ = self.vocab.decode(ref[:ref_len].cpu().tolist())
+                        print(tag, dataset_index.item(), prompt, loss.item(), self.vocab.format(ref), sep="\t", flush=True)
 
     @torch.inference_mode()
     def evaluate(self, epoch, loader, attempts=1, tag='valid', prompts=[None]):
@@ -438,6 +442,7 @@ def make_parser():
     parser.add_argument('--test-attempts', type=int, default=1, help="Estimate WER from this many pairwise hypotheses obtained by test-time dropout (try 10?))")
     parser.add_argument('--test-spin-prompts', action='store_true', help="Prepend spin prompts (<↑>, <↓>) to test hypotheses")
     parser.add_argument('--score', type=str, required=False, help="Datasets to run scoring on, comma separated")
+    parser.add_argument('--score-attempts', type=int, default=1, help="Score the input this many times with dropout on")
     parser.add_argument('--score-spin-prompts', action='store_true', help="Prepend spin prompts (<↑>, <↓>) to scoring hypotheses")
 
     parser.add_argument('--grad-norms', type=str, help="Compute gradient norms on each sample from this dataset")
@@ -519,18 +524,18 @@ def main():
         system.evaluate(epoch, valid_loader, tag='valid')
 
     if args.test:
-        print('testing', epoch)
+        print('testing', epoch, 'attempts', args.test_attempts, flush=True)
         if args.test_spin_prompts:
             system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test', prompts=['<↑>', '<↓>'])
         else:
             system.evaluate(epoch, test_loader, attempts=args.test_attempts, tag='test', prompts=[None])
 
     if args.score:
-        print('scoring', epoch)
+        print('scoring', epoch, 'attempts', args.score_attempts, flush=True)
         if args.score_spin_prompts:
-            system.score(epoch, score_loader, tag='score', prompts=['<↑>', '<↓>'])
+            system.score(epoch, score_loader, tag='score', prompts=['<↑>', '<↓>'], attempts=args.score_attempts)
         else:
-            system.score(epoch, score_loader, tag='score', prompts=[None])
+            system.score(epoch, score_loader, tag='score', prompts=[None], attempts=args.score_attempts)
 
     if args.grad_norms:
         from ha.active import compute_grad_norm, MiniSystem
