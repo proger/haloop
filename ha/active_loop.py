@@ -32,8 +32,10 @@ parser.add_argument('strategy', type=str, nargs='+', help='query strategy (rando
 # iteration parameters
 parser.add_argument('--start', type=int, default=0,
                     help='start iteration')
+parser.add_argument('--stop-before', type=int, default=10,
+                    help='stop before iteration')
 parser.add_argument('--steps', type=int, default=10,
-                    help='iterations to make since --start')
+                    help='total iterations to make')
 parser.add_argument('--exp', type=Path, default=Path('exp/random'),
                     help='experiment root for all iterations')
 parser.add_argument('--train', action='store_true',
@@ -133,11 +135,19 @@ def train(root, train, eval, test, args, spin=False, test_attempts=1):
     return just_trained
 
 
-def perform_query(ranked_df, query_size: str):
-    if query_size.endswith('h'):
-        return query_hours(ranked_df, max_seconds=int(query_size[:-1]) * 60 * 60)
+def perform_query(ranked_df, duration, query_size: str, is_final=False):
+    ranked_df = ranked_df.reset_index()[['media_filename', 'text']].set_index('media_filename')
+    ranked_df = ranked_df.merge(duration, on='media_filename')
+
+    if is_final:
+        output_df = ranked_df
     else:
-        return ranked_df.head(int(query_size))
+        if query_size.endswith('h'):
+            output_df = query_hours(ranked_df, max_seconds=int(query_size[:-1]) * 60 * 60)
+        else:
+            output_df = ranked_df.head(int(query_size))
+
+    return output_df[['media_filename', 'text']].set_index('media_filename')
 
 
 def query_hours(ranked_df, max_seconds=10*60*60):
@@ -148,7 +158,7 @@ def query_hours(ranked_df, max_seconds=10*60*60):
         seconds += ranked_df.iloc[end].seconds
         if seconds > max_seconds:
             break
-    return ranked_df.iloc[:end].set_index('media_filename')
+    return ranked_df.iloc[:end]
 
 
 def perform_egl(args, exp, combined_train, corrupted, prev_corrupted_dataset):
@@ -274,17 +284,64 @@ def run_step(args, exp, *, prev=None, is_final=False):
             query = query.reset_index()
             query = query.sort_values('log_prob_mean', key=lambda x: -x.astype(float), ascending=False)
 
+        case ['advantage', neg_test_log_dataset, neg_dataset, pos_test_log_dataset, pos_dataset]:
+            # get neg_test_log_dataset using:
+            # hac --init exp/prob01.pt --test fbank:data/flaky/train-clean-100.dirty28538.txt.piece.reord --test-attempts 40 --vocab data/flaky/libribpe.vocab --eval-batch-size 1024 --compile --device cuda:1 | tee exp/prob01-dirty28538.test40.take2
+            # neg_dataset is data/flaky/train-clean-100.dirty28538.txt.piece.reord
+
+            # get pos_test_log_dataset using:
+            # hac --init exp/logprob-once/04/clean/last.pt --test fbank:exp/logprob-once/04/corrupted.txt.piece --test-attempts 40 --vocab data/flaky/libribpe.vocab  --eval-batch-size 1024 --compile --device cuda:0 | tee exp/logprob-once/04/clean/test-corrupted.log
+            # pos_dataset is exp/logprob-once/04/corrupted.txt.piece
+
+            assert str(corrupted) == str(pos_dataset), f'{corrupted} != {pos_dataset}' # pos is corrupted data evaluated by a pos model
+
+            neg_hyp_df = test_log_to_dataset(Path(neg_test_log_dataset)).rename(columns={'text': 'hyp_text'})
+            pos_hyp_df = test_log_to_dataset(Path(pos_test_log_dataset)).rename(columns={'text': 'hyp_text'})
+
+            neg_ref_df = read_text(Path(neg_dataset))
+            pos_ref_df = read_text(Path(pos_dataset))
+
+            neg_df = neg_ref_df.merge(neg_hyp_df, on='dataset_index').set_index('media_filename')
+            pos_df = pos_ref_df.merge(pos_hyp_df, on='dataset_index').set_index('media_filename')
+
+            neg_ref_df = neg_ref_df.set_index('media_filename') # we only care about the intersection of neg and pos from now on
+            pos_ref_df = pos_ref_df.set_index('media_filename')
+
+            expected_neg_df = neg_df.groupby(neg_df.index).log_prob.mean().rename('neg_expected_log_prob')
+            expected_pos_df = pos_df.groupby(pos_df.index).log_prob.mean().rename('pos_expected_log_prob')
+
+            # entries with lowest probability go at the top
+            log_prob_query = pos_ref_df.merge(expected_neg_df, left_index=True, right_index=True)
+            log_prob_query = log_prob_query.sort_values('neg_expected_log_prob', key=lambda x: -x.astype(float), ascending=False)
+
+            neg1p = np.log1p(-np.exp(expected_neg_df))
+            advantage_df = (neg1p - expected_pos_df).rename('advantage')
+            advantage_query = pos_ref_df.merge(advantage_df, left_index=True, right_index=True)
+            # entries with largest likelihood difference go at the top
+            advantage_query = advantage_query.sort_values('advantage', ascending=False)
+
+            def rank_corr(l, r):
+                "spearman rank correlation between two differently ordered dataframes with the same index"
+                l['left_rank'] = np.arange(len(l))
+                r['right_rank'] = np.arange(len(r))
+                both = l.merge(r, left_index=True, right_index=True)
+                rank_sq_diff = (both['left_rank'] - both['right_rank'])**2
+                return 1 - 6 * rank_sq_diff.sum() / (len(both) * (len(both)**2 - 1))
+
+            # compare rankings between log_prob_query and advantage_query
+            print('# rank correlation between log_prob and advantage', rank_corr(log_prob_query, advantage_query), file=sys.stderr)
+
+            # perf_advantage_query = perform_query(advantage_query, duration=duration, query_size=args.query_size, is_final=is_final)
+            # perf_log_prob_query = perform_query(log_prob_query, duration=duration, query_size=args.query_size, is_final=is_final)
+            # print('# rank correlation between log_prob and advantage after query', rank_corr(perf_log_prob_query, perf_advantage_query), file=sys.stderr)
+
+            query = advantage_query
+
     print(query, flush=True)
-    query = query[['media_filename', 'text']]
-    query = query.set_index('media_filename')
-    query = query.merge(duration, on='media_filename')
+    query = perform_query(query, duration=duration, query_size=args.query_size, is_final=is_final)
+    print('# queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
     if is_final:
-        # take all remaining data
-        query = query.set_index('media_filename')
-        print('# final query. queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
-    else:
-        query = perform_query(query, query_size=args.query_size)
-        print('# queried', len(query), 'clean utterances, query size was', args.query_size, file=sys.stderr)
+        print('# final query', file=sys.stderr)
     assert len(query) > 0, "query size is zero, something is wrong"
     assert len(query) < 10000, "query size is too large, something is wrong"
 
@@ -346,6 +403,10 @@ def main():
     np.random.seed(args.seed)
 
     for step in range(args.start, args.start+args.steps):
+        if args.stop_before is not None and step >= args.stop_before:
+            print('# stopping before', step, file=sys.stderr)
+            break
+
         exp = args.exp / f'{step:02d}'
         if step == 0:
             train_path = run_step(args, exp)
