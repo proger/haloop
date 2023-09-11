@@ -81,7 +81,7 @@ def test_log_to_dataset(test_log_filename: Path):
         decoding_epoch = None
         for line in f:
             if line.startswith('testing'):
-                decoding_epoch = line.strip().split(maxsplit=1)[1]
+                decoding_epoch = line.strip().split()[1]
             elif decoding_epoch and line.startswith(decoding_epoch) and '\thyp' in line:
                 epoch, dataset_index, hypN, last_label = line.strip().split('\t')
                 assert epoch == decoding_epoch, f"epoch={epoch}"
