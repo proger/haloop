@@ -6,6 +6,7 @@ from ha.subprocess import run
 import numpy as np
 
 from .wer import compute_wer_pointwise, clean_tokens, read_text, format_wer
+from .corr import rank_corr
 
 parser = argparse.ArgumentParser(description="""Learning to improve supervision.
 """, formatter_class=argparse.Formatter)
@@ -40,7 +41,8 @@ parser.add_argument('--exp', type=Path, default=Path('exp/random'),
                     help='experiment root for all iterations')
 parser.add_argument('--train', action='store_true',
                     help='train the model after every query')
-
+parser.add_argument('--ipdb', action='store_true',
+                    help='break into ipdb before query')
 
 def read_grads(filename: Path):
     rows = []
@@ -225,10 +227,14 @@ def run_step(args, exp, *, prev=None, is_final=False):
         assert combined_train.exists(), f'{combined_train} does not exist'
         corrupted = prev / 'corrupted.txt.piece'
         prev_corrupted_dataset = read_text(corrupted)
+
+        prev_clean = read_text(prev / 'clean.txt.piece')
     else:
         print('# starting from scratch', exp, file=sys.stderr)
         corrupted = combined_train = args.initial_corrupted
         prev_corrupted_dataset = read_text(args.initial_corrupted)
+
+        prev_clean = None
 
     exp.mkdir(exist_ok=True, parents=True)
 
@@ -283,59 +289,13 @@ def run_step(args, exp, *, prev=None, is_final=False):
             del query['text_y']
             query = query.reset_index()
             query = query.sort_values('log_prob_mean', key=lambda x: -x.astype(float), ascending=False)
-
+            
         case ['advantage', neg_test_log_dataset, neg_dataset, pos_test_log_dataset, pos_dataset]:
-            # get neg_test_log_dataset using:
-            # hac --init exp/prob01.pt --test fbank:data/flaky/train-clean-100.dirty28538.txt.piece.reord --test-attempts 40 --vocab data/flaky/libribpe.vocab --eval-batch-size 1024 --compile --device cuda:1 | tee exp/prob01-dirty28538.test40.take2
-            # neg_dataset is data/flaky/train-clean-100.dirty28538.txt.piece.reord
-
-            # get pos_test_log_dataset using:
-            # hac --init exp/logprob-once/04/clean/last.pt --test fbank:exp/logprob-once/04/corrupted.txt.piece --test-attempts 40 --vocab data/flaky/libribpe.vocab  --eval-batch-size 1024 --compile --device cuda:0 | tee exp/logprob-once/04/clean/test-corrupted.log
-            # pos_dataset is exp/logprob-once/04/corrupted.txt.piece
-
-            assert str(corrupted) == str(pos_dataset), f'{corrupted} != {pos_dataset}' # pos is corrupted data evaluated by a pos model
-
-            neg_hyp_df = test_log_to_dataset(Path(neg_test_log_dataset)).rename(columns={'text': 'hyp_text'})
-            pos_hyp_df = test_log_to_dataset(Path(pos_test_log_dataset)).rename(columns={'text': 'hyp_text'})
-
-            neg_ref_df = read_text(Path(neg_dataset))
-            pos_ref_df = read_text(Path(pos_dataset))
-
-            neg_df = neg_ref_df.merge(neg_hyp_df, on='dataset_index').set_index('media_filename')
-            pos_df = pos_ref_df.merge(pos_hyp_df, on='dataset_index').set_index('media_filename')
-
-            neg_ref_df = neg_ref_df.set_index('media_filename') # we only care about the intersection of neg and pos from now on
-            pos_ref_df = pos_ref_df.set_index('media_filename')
-
-            expected_neg_df = neg_df.groupby(neg_df.index).log_prob.mean().rename('neg_expected_log_prob')
-            expected_pos_df = pos_df.groupby(pos_df.index).log_prob.mean().rename('pos_expected_log_prob')
-
-            # entries with lowest probability go at the top
-            log_prob_query = pos_ref_df.merge(expected_neg_df, left_index=True, right_index=True)
-            log_prob_query = log_prob_query.sort_values('neg_expected_log_prob', key=lambda x: -x.astype(float), ascending=False)
-
-            neg1p = np.log1p(-np.exp(expected_neg_df))
-            advantage_df = (neg1p - expected_pos_df).rename('advantage')
-            advantage_query = pos_ref_df.merge(advantage_df, left_index=True, right_index=True)
-            # entries with largest likelihood difference go at the top
-            advantage_query = advantage_query.sort_values('advantage', ascending=False)
-
-            def rank_corr(l, r):
-                "spearman rank correlation between two differently ordered dataframes with the same index"
-                l['left_rank'] = np.arange(len(l))
-                r['right_rank'] = np.arange(len(r))
-                both = l.merge(r, left_index=True, right_index=True)
-                rank_sq_diff = (both['left_rank'] - both['right_rank'])**2
-                return 1 - 6 * rank_sq_diff.sum() / (len(both) * (len(both)**2 - 1))
-
-            # compare rankings between log_prob_query and advantage_query
-            print('# rank correlation between log_prob and advantage', rank_corr(log_prob_query, advantage_query), file=sys.stderr)
-
-            # perf_advantage_query = perform_query(advantage_query, duration=duration, query_size=args.query_size, is_final=is_final)
-            # perf_log_prob_query = perform_query(log_prob_query, duration=duration, query_size=args.query_size, is_final=is_final)
-            # print('# rank correlation between log_prob and advantage after query', rank_corr(perf_log_prob_query, perf_advantage_query), file=sys.stderr)
-
-            query = advantage_query
+            query = log_prob_advantage(neg_test_log_dataset, neg_dataset, pos_test_log_dataset, pos_dataset,
+                                       prev_corrupted_dataset=prev_corrupted_dataset,
+                                       args=args,
+                                       duration=duration,
+                                       is_final=is_final)
 
     print(query, flush=True)
     query = perform_query(query, duration=duration, query_size=args.query_size, is_final=is_final)
@@ -345,19 +305,78 @@ def run_step(args, exp, *, prev=None, is_final=False):
     assert len(query) > 0, "query size is zero, something is wrong"
     assert len(query) < 10000, "query size is too large, something is wrong"
 
+    return execute_query(query, oracle, prev_corrupted_dataset, prev_clean=prev_clean, exp=exp)
+
+
+def log_prob_advantage(
+    neg_test_log_dataset,
+    neg_dataset,
+    pos_test_log_dataset,
+    pos_dataset,
+    *,
+    prev_corrupted_dataset,
+    args,
+    duration,
+    is_final=False,
+):
+    # get neg_test_log_dataset using:
+    # hac --init exp/prob01.pt --test fbank:data/flaky/train-clean-100.dirty28538.txt.piece.reord --test-attempts 40 --vocab data/flaky/libribpe.vocab --eval-batch-size 1024 --compile --device cuda:1 | tee exp/prob01-dirty28538.test40.take2
+    # neg_dataset is data/flaky/train-clean-100.dirty28538.txt.piece.reord
+
+    # get pos_test_log_dataset using:
+    # hac --init exp/logprob-once/04/clean/last.pt --test fbank:exp/logprob-once/04/corrupted.txt.piece --test-attempts 40 --vocab data/flaky/libribpe.vocab  --eval-batch-size 1024 --compile --device cuda:0 | tee exp/logprob-once/04/clean/test-corrupted.log
+    # pos_dataset is exp/logprob-once/04/corrupted.txt.piece
+
+    #assert str(corrupted) == str(pos_dataset), f'{corrupted} != {pos_dataset}' # pos is corrupted data evaluated by a pos model
+
+    neg_hyp_df = test_log_to_dataset(Path(neg_test_log_dataset)).rename(columns={'text': 'hyp_text'})
+    pos_hyp_df = test_log_to_dataset(Path(pos_test_log_dataset)).rename(columns={'text': 'hyp_text'})
+
+    neg_ref_df = read_text(Path(neg_dataset))
+    pos_ref_df = read_text(Path(pos_dataset))
+
+    neg_df = neg_ref_df.merge(neg_hyp_df, on='dataset_index').set_index('media_filename')
+    pos_df = pos_ref_df.merge(pos_hyp_df, on='dataset_index').set_index('media_filename')
+
+    neg_ref_df = neg_ref_df.set_index('media_filename')
+    pos_ref_df = pos_ref_df.set_index('media_filename')
+
+    # we only care about the intersection of neg and pos with query_pool_df from now on
+    query_pool_df = prev_corrupted_dataset.copy().set_index('media_filename')
+
+    expected_neg_df = neg_df.groupby(neg_df.index).log_prob.mean().rename('neg_expected_log_prob')
+    expected_pos_df = pos_df.groupby(pos_df.index).log_prob.mean().rename('pos_expected_log_prob')
+
+    # entries with lowest probability go at the top
+    log_prob_query = query_pool_df.merge(expected_neg_df, left_index=True, right_index=True)
+    log_prob_query = log_prob_query.sort_values('neg_expected_log_prob', key=lambda x: -x.astype(float), ascending=False)
+
+    #neg1p = np.log1p(-np.exp(expected_neg_df))
+    #advantage_df = (neg1p - expected_pos_df).rename('advantage')
+
+    advantage_df = (expected_neg_df - expected_pos_df).rename('advantage')
+    advantage_query = query_pool_df.merge(advantage_df, left_index=True, right_index=True)
+    # entries with largest likelihood difference go at the top
+    advantage_query = advantage_query.sort_values('advantage', ascending=False)
+
+    # compare rankings between log_prob_query and advantage_query
+    print('# rank correlation between log_prob and advantage', rank_corr(log_prob_query, advantage_query), file=sys.stderr)
+
+    perf_advantage_query = perform_query(advantage_query, duration=duration, query_size=args.query_size, is_final=is_final)
+    perf_log_prob_query = perform_query(log_prob_query, duration=duration, query_size=args.query_size, is_final=is_final)
+    intersection_over_union = len(set(perf_advantage_query.index) & set(perf_log_prob_query.index)) / len(set(perf_advantage_query.index) | set(perf_log_prob_query.index))
+    print('# IoU between log_prob and advantage queries', intersection_over_union, file=sys.stderr)
+
+    return advantage_query
+
+
+def execute_query(query, oracle, prev_corrupted_dataset, prev_clean=None, exp=None):
     # Read true labels for the query from the oracle dataset
     oracle_query_result = oracle[oracle['media_filename'].isin(query.index)]
-    print('# writing', exp / 'query_result.txt.piece', file=sys.stderr)
-    oracle_query_result.to_csv(exp / 'query_result.txt.piece', sep='\t', header=False, index=False)
 
-    if prev:
-        # Concat clean.txt.piece from previous experiments
-        clean_train_dataset = pd.concat([read_text(prev / 'clean.txt.piece'), oracle_query_result])
-    else:
-        clean_train_dataset = oracle_query_result
-
-    clean_train_dataset.to_csv(exp / 'clean.txt.piece', sep='\t', header=False, index=False)
-    print('# writing', exp / 'clean.txt.piece', file=sys.stderr)
+    if exp is not None:
+        print('# writing', exp / 'query_result.txt.piece', file=sys.stderr)
+        oracle_query_result.to_csv(exp / 'query_result.txt.piece', sep='\t', header=False, index=False)
 
     print('# computing errors between oracle query result and previously corrupted dataset', file=sys.stderr)
     ler_df = compute_wer_pointwise(
@@ -374,12 +393,22 @@ def run_step(args, exp, *, prev=None, is_final=False):
 
     # Read the rest of the labels from the original dataset
     remaining_corrupted_dataset = prev_corrupted_dataset[~prev_corrupted_dataset['media_filename'].isin(query.index)]
-    remaining_corrupted_dataset.to_csv(exp / 'corrupted.txt.piece', sep='\t', header=False, index=False)
 
-    combined_train_new_path = exp / 'combined_train.txt.piece'
-    print('# writing combined dataset', combined_train_new_path, file=sys.stderr)
+    if exp is not None:
+        remaning_corrupted_path = exp / 'corrupted.txt.piece'
+        print('# writing remaining corrupted data', remaning_corrupted_path, file=sys.stderr)
+        remaining_corrupted_dataset.to_csv(remaning_corrupted_path, sep='\t', header=False, index=False)
+
+    if prev_clean is not None:
+        clean_train_dataset = pd.concat([prev_clean, oracle_query_result])
+    else:
+        clean_train_dataset = oracle_query_result
+
+    if exp is not None:
+        print('# writing', exp / 'clean.txt.piece', file=sys.stderr)
+        clean_train_dataset.to_csv(exp / 'clean.txt.piece', sep='\t', header=False, index=False)
+
     combined_train = pd.concat([clean_train_dataset, remaining_corrupted_dataset])
-    combined_train.to_csv(combined_train_new_path, sep='\t', header=False, index=False)
 
     print('# computing errors between new combined dataset and oracle', file=sys.stderr)
     gler_df = compute_wer_pointwise(
@@ -395,7 +424,13 @@ def run_step(args, exp, *, prev=None, is_final=False):
     )
     print(*format_wer(gwer_df, tag='GWER'), file=sys.stderr)
 
-    return combined_train_new_path
+    if exp is not None:
+        combined_train_new_path = exp / 'combined_train.txt.piece'
+        print('# writing combined dataset', combined_train_new_path, file=sys.stderr)
+        combined_train.to_csv(combined_train_new_path, sep='\t', header=False, index=False)
+        return combined_train_new_path
+    else:
+        return None
 
 
 def main():
