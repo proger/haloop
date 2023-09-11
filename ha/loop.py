@@ -538,7 +538,7 @@ def main():
             system.score(epoch, score_loader, tag='score', prompts=[None], attempts=args.score_attempts)
 
     if args.grad_norms:
-        from ha.active import compute_grad_norm, MiniSystem
+        from ha.grad_norm import compute_grad_norm, MiniSystem
         from ha.sampler import DurationBatchSampler
 
         mini_system = MiniSystem(system.encoder, system.recognizer)
