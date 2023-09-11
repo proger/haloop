@@ -277,7 +277,7 @@ def run_step(args, exp, *, prev=None, is_final=False):
             spin_df = read_text(test).merge(spin_df, on='dataset_index')
             query = spin_df.sort_values('log_prob_per_token', key=lambda x: -x.astype(float), ascending=False)
         case ['egl']:
-            query = perform_egl(args, combined_train, corrupted, prev_corrupted_dataset)
+            query = perform_egl(args, exp, combined_train, corrupted, prev_corrupted_dataset)
         case ['logfile', log_filename, test_dataset]:
             # read utterance log probs from file
             df = test_log_to_dataset(Path(log_filename))
