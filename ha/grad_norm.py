@@ -28,7 +28,7 @@ class MiniSystem(nn.Module):
 def compute_grad_norm(self: MiniSystem, loader):
     device = next(self.encoder.parameters()).device
 
-    self.eval()
+    self.train() # test time dropout pls
     for dataset_indices, inputs, condtargets, input_lengths, condtarget_lengths in loader:
         inputs = inputs.to(device) # (N, T, C)
         input_lengths = input_lengths.to(device) # (N,)
@@ -55,12 +55,12 @@ def compute_grad_norm(self: MiniSystem, loader):
         #     print('egl score', dataset_index.item(), grad_length.item(), sep='\t', flush=True)
 
 
-def make_per_sample_gradients(system):
+def make_per_sample_gradients(system, randomness='different'):
     def compute_loss(params, buffers, args):
         loss = functional_call(system, (params, buffers), args)
         return loss
 
-    return vmap(grad_and_value(compute_loss), in_dims=(None, 0, 0))
+    return vmap(grad_and_value(compute_loss), in_dims=(None, 0, 0), randomness=randomness)
 
 
 def norm_batched(x, p=2.0, eps=1e-6):
@@ -71,7 +71,7 @@ def norm_batched(x, p=2.0, eps=1e-6):
 
 
 def gradient_norms(
-    system: MiniSystem,
+    self: MiniSystem,
     inputs: torch.Tensor, # (N, T, C)
     condtargets: torch.Tensor, # (N, U)
     input_lengths: torch.Tensor, # (N,)
@@ -82,12 +82,12 @@ def gradient_norms(
 
     Returns a tuple of (gradient_norms, losses).
     """
-    system.eval()
+    self.train() # test time dropout pls
 
-    params = {k: v.detach() for k, v in system.named_parameters()}
-    buffers = {k: v.detach() for k, v in system.named_buffers()}
+    params = {k: v.detach() for k, v in self.named_parameters()}
+    buffers = {k: v.detach() for k, v in self.named_buffers()}
 
-    per_sample_gradients = make_per_sample_gradients(system)
+    per_sample_gradients = make_per_sample_gradients(self)
 
     args = (
         inputs[:, None, :, :],
