@@ -66,7 +66,7 @@ def training_log_to_dataset(training_log_filename: Path):
                 assert epoch == decoding_epoch and hypN.startswith('hyp'), f"epoch={epoch}, hypN={hypN}"
                 train_hypotheses.append((int(dataset_index), clean_tokens(text)))
             elif line.startswith('testing'):
-                decoding_epoch = line.strip().split(maxsplit=1)[1]
+                decoding_epoch = line.strip().split()[1]
                 continue
             elif line.startswith('valid [12'):
                 decoding_epoch = '12'
@@ -100,14 +100,6 @@ def test_log_to_dataset(test_log_filename: Path):
 def estimate_egl(
     grad_norms_df: pd.DataFrame # ['grad_norm', 'loss', 'media_filename']
 ) -> pd.Series:
-    #from scipy.special import logsumexp
-    # #
-    # #    \log \sum_y ||\grad P(y|x)||**2 P(y|x)
-    # # =  \log \sum_y exp(\log ||\grad P(y|x)||**2 - NLL(y|x))
-    # #
-    # grad_norms['product'] = np.log((grad_norms['grad_norm'] ** 2)) - grad_norms['loss']
-    # egl = grad_norms.groupby('media_filename')['product'].apply(logsumexp)
-
     grad_norms_df['product'] = (grad_norms_df['grad_norm'] ** 2) * np.exp(-grad_norms_df['loss'])
     egl = grad_norms_df.groupby('media_filename')['product'].apply(np.sum)
 
@@ -211,8 +203,9 @@ def perform_egl(args, exp, combined_train, corrupted, prev_corrupted_dataset):
     ], axis=1)
 
     query = estimate_egl(grad_norms_df)
-    query.to_csv(exp / 'egl', sep='\t', header=False)
     print('# writing utterance scores to', exp / 'egl', file=sys.stderr)
+    query.to_csv(exp / 'egl', sep='\t', header=False)
+    query = prev_corrupted_dataset.set_index('media_filename').merge(query, left_index=True, right_index=True)
     return query
 
 
