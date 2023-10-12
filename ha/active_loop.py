@@ -108,7 +108,7 @@ def estimate_egl(
 
 
 
-def train(root, train, eval, test, args, spin=False, test_attempts=1):
+def train(root, train, eval, test, args, spin=False, test_attempts=1, seed=42):
     root.mkdir(exist_ok=True, parents=True)
     if not (root / 'last.pt').exists() or not (root / 'train.log').exists():
         prefixes = ['mask:fbank:speed:', 'mask:fbank:speed:randpairs:']
@@ -117,6 +117,7 @@ def train(root, train, eval, test, args, spin=False, test_attempts=1):
             '--train', ','.join([f'{prefix}{train}' for prefix in prefixes]),
             '--eval', f'fbank:{eval}', ] + ([
             '--test', f'fbank:{test}',
+            '--seed', str(seed),
             '--test-attempts', str(test_attempts),
             ] if test else []) + f'--num-epochs 13 --num-workers 16 --lr_decay_iters 15835 --lr_schedule linear --warmup_iters 3000 --batch-size 24 --accumulate 2 --lr 0.0006 --min_lr 0 --eval-batch-size 512 --compile --vocab {str(args.vocab)} --weight_decay 0.1'.split() + [
             '--exp', str(root),# '--allow-oom'
@@ -252,7 +253,7 @@ def run_step(args, exp, *, prev=None, is_final=False):
             ], axis=1)
             query = entropy_prob_df.sort_values('entropy_per_token', key=lambda x: x.astype(float), ascending=False)
         case ['prob']:
-            train(exp / 'entropy_prob', combined_train, args.eval, args.oracle, args) # why oracle?
+            train(exp / 'entropy_prob', combined_train, args.eval, args.oracle, args, seed=args.seed, test_attempts=40)
 
             entropy_prob_df = pd.concat([
                 oracle,
