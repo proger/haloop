@@ -47,6 +47,9 @@ hax = "ha.corr:main"
 [tool.hatch.version]
 path = "ha/__about__.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["ha"]
+
 [tool.hatch.envs.default]
 dependencies = [
   "pytest",
