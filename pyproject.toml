@@ -43,6 +43,7 @@ hal = "ha.attention_loop:main"
 hat = "ha.attention:main"
 haw = "ha.wer:main"
 hax = "ha.corr:main"
+hap = "ha.score:main"
 
 [tool.hatch.version]
 path = "ha/__about__.py"

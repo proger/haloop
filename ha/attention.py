@@ -178,7 +178,8 @@ class GPT(nn.Module):
     def forward_all(self,
                     input_ids, # (B, T)
                     target_ids, # (B, T)
-                    past=None # (nlayers, 2, B, nh, T, hs)
+                    past=None, # (nlayers, 2, B, nh, T, hs)
+                    reduction='mean',
                     ):
         device = input_ids.device
         b, t = input_ids.size()
@@ -199,7 +200,7 @@ class GPT(nn.Module):
         x = self.transformer.ln_f(x)
 
         logits = self.lm_head(x)
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=0)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), ignore_index=0, reduction=reduction)
         return loss
 
     def forward_context(self, input_ids):

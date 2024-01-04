@@ -9,7 +9,9 @@ Haloop is a speech agent toolkit. Haloop provides:
 - `har` for RNN language model training and evaluation;
 - `hal` for causal attention model training;
 - `hat` for agent testing;
-- `haw` to compare labels in datasets using word error rate.
+- `hap` to score log probabilities of sentences under the GPT language model;
+- `haw` to compare labels in datasets using word error rate;
+- `hax` to compute correlations between datasets;
 
 The package can be installed from PyPI:
 
@@ -34,6 +36,12 @@ Now, kick off the REPL:
 
 ```
 hat --spm wiki.model ckpt10m.pt
+```
+
+Score [a list of sentences](https://lang.org.ua/en/ubertext/) by computing log probabilities under the language model. First the input file will be sorted by length to improve GPU utilization:
+```
+cat ubertext.wikipedia.filter_rus_gcld+short.text_only.txt | awk -v OFS="\t" '{print length, $0}' | sort -r -n -s | cut -f2- > wikipedia.bylength.txt
+cat wikipedia.bylength.txt | hap --compile --spm wiki.model ckpt10m.pt
 ```
 
 ### Citing
