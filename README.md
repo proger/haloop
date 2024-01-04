@@ -38,10 +38,10 @@ Now, kick off the REPL:
 hat --spm wiki.model ckpt10m.pt
 ```
 
-Score [a list of sentences](https://lang.org.ua/en/ubertext/) by computing log probabilities under the language model. First the input file will be sorted by length to improve GPU utilization:
+Score [a list of sentences](https://lang.org.ua/en/ubertext/) by computing log probabilities under the language model. First the input file will be sorted by token count to improve GPU utilization:
 ```
-cat ubertext.wikipedia.filter_rus_gcld+short.text_only.txt | awk -v OFS="\t" '{print length, $0}' | sort -r -n -s | cut -f2- > wikipedia.bylength.txt
-cat wikipedia.bylength.txt | hap --compile --spm wiki.model ckpt10m.pt
+cat ubertext.wikipedia.filter_rus_gcld+short.text_only.txt | spm_encode --model wiki.model | awk -v OFS="\t" '{ print length, $0 }' | sort -r -n -s | cut -f2-  | spm_decode --model wiki.model > wikipedia.toksorted.txt
+cat wikipedia.toksorted.txt | hap --compile --spm wiki.model ckpt10m.pt | pv -l > wikipedia.toksorted.scores.txt
 ```
 
 ### Citing
