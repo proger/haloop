@@ -26,7 +26,7 @@ def batched(iterable, n):
 
 @torch.inference_mode()
 def main():
-    parser = argparse.ArgumentParser(description='Score sentences with GPT. Prints two columns: negative log likelihood per token and number of tokens in the prompt.')
+    parser = argparse.ArgumentParser(description='Score sentences with GPT. Prints three columns: negative log likelihood per token, number of tokens in the prompt and total number of tokens in the input before truncation.')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--dtype', type=str, default='bfloat16', help='Data type')
     parser.add_argument('--compile', action='store_true', help='Compile model')
@@ -53,22 +53,28 @@ def main():
     class Tok:
         eos = 50256
 
-    for lines in batched(sys.stdin, args.batch_size):
+    for i, lines in enumerate(batched(sys.stdin, args.batch_size)):
         completion_tokens = sp.encode([p.strip() for p in lines])
         completions = nn.utils.rnn.pad_sequence(
             [torch.LongTensor(p) for p in completion_tokens],
             batch_first=True,
             padding_value=0
         ).to(device=device)
+
+        if completions.size(-1) >= model.config.block_size:
+            print(f'warning: batch {i} is too wide (shape {completions.shape}) and will be truncated', file=sys.stderr)
+            completions = completions[:, :model.config.block_size].contiguous()
+
         prompts = torch.full((len(completions), 1), Tok.eos, dtype=torch.long, device=device)
-        input_ids = torch.cat([prompts, completions[..., :-1]], dim=-1)
+        input_ids = torch.cat([prompts, completions[..., :-1]], dim=-1)[:, :model.config.block_size]
 
         with torch.amp.autocast(device_type='cuda', dtype=dtype):
             logits = model.forward_all(input_ids=input_ids, target_ids=completions, reduction='none')
             logits = logits.view(-1, input_ids.shape[-1])
             for loss, tokens in zip(logits.sum(-1), completion_tokens):
-                loss_per_token = loss.item() / len(tokens)
-                print(f'{loss_per_token:0.3f}', len(tokens), sep='\t')
+                num_tokens = min(model.config.block_size, len(tokens))
+                loss_per_token = loss.item() / num_tokens
+                print(f'{loss_per_token:0.3f}', num_tokens, len(tokens), sep='\t')
 
 
 if __name__ == '__main__':
