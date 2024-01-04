@@ -42,10 +42,10 @@ def main():
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 
     model = load_model(args.ckpt_path, map_location=device)
-    print('Loaded model:', model.config, file=sys.stderr)
     assert model.config.causal
     if args.compile:
         model = torch.compile(model)
+    print('Loaded model:', model.config, file=sys.stderr)
 
     dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16}[args.dtype]
 
@@ -74,7 +74,7 @@ def main():
             for loss, tokens in zip(logits.sum(-1), completion_tokens):
                 num_tokens = min(model.config.block_size, len(tokens))
                 loss_per_token = loss.item() / num_tokens
-                print(f'{loss_per_token:0.3f}', num_tokens, len(tokens), sep='\t')
+                print(f'{loss_per_token:0.3f}', num_tokens, len(tokens), sep='\t', flush=True)
 
 
 if __name__ == '__main__':
