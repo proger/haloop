@@ -30,6 +30,7 @@ def main():
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--dtype', type=str, default='bfloat16', help='Data type')
     parser.add_argument('--compile', action='store_true', help='Compile model')
+    parser.add_argument('--verbose', action='store_true', help='Print detailed information about the sentence')
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--spm', type=str, required=True)
     parser.add_argument('--batch-size', type=int, default=32)
@@ -45,7 +46,7 @@ def main():
     assert model.config.causal
     if args.compile:
         model = torch.compile(model)
-    print('Loaded model:', model.config, file=sys.stderr)
+    #print('Loaded model:', model.config, file=sys.stderr)
 
     dtype = {'bfloat16': torch.bfloat16, 'float16': torch.float16}[args.dtype]
 
@@ -70,11 +71,16 @@ def main():
 
         with torch.amp.autocast(device_type='cuda', dtype=dtype):
             logits = model.forward_all(input_ids=input_ids, target_ids=completions, reduction='none')
-            logits = logits.view(-1, input_ids.shape[-1])
-            for loss, tokens in zip(logits.sum(-1), completion_tokens):
+            if len(logits.shape) < 2:
+                logits = logits[None, :]
+            for sentence_logits, loss, tokens in zip(logits, logits.view(-1, input_ids.shape[-1]).sum(-1), completion_tokens):
                 num_tokens = min(model.config.block_size, len(tokens))
                 loss_per_token = loss.item() / num_tokens
-                print(f'{loss_per_token:0.3f}', num_tokens, len(tokens), sep='\t', flush=True)
+                if args.verbose:
+                    from rich import print as print_
+                    print_(f'{loss_per_token:0.3f}', num_tokens, ' '.join(f'{sp.id_to_piece(t)} [dim]{l:.02f}[/dim]' for t,l in zip(tokens, sentence_logits.tolist())), sep='\t', flush=True)
+                else:
+                    print(f'{loss_per_token:0.3f}', num_tokens, len(tokens), sep='\t', flush=True)
 
 
 if __name__ == '__main__':
