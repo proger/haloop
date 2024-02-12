@@ -71,9 +71,9 @@ def main():
 
         with torch.amp.autocast(device_type='cuda', dtype=dtype):
             logits = model.forward_all(input_ids=input_ids, target_ids=completions, reduction='none')
-            if len(logits.shape) < 2:
-                logits = logits[None, :]
-            for sentence_logits, loss, tokens in zip(logits, logits.view(-1, input_ids.shape[-1]).sum(-1), completion_tokens):
+            logits = logits.view(-1, input_ids.shape[-1])
+            for sentence_logits, tokens in zip(logits, completion_tokens):
+                loss = sentence_logits.sum(-1)
                 num_tokens = min(model.config.block_size, len(tokens))
                 loss_per_token = loss.item() / num_tokens
                 if args.verbose:
