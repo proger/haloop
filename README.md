@@ -26,7 +26,7 @@ pip install haloop
 You will need to install and download:
 
 ```
-pip install bitsandbytes sentencepiece
+pip install sentencepiece
 
 wget https://a.wilab.org.ua/gpt/wiki.model  # sentencepiece tokenizer
 wget https://a.wilab.org.ua/gpt/ckpt10m.pt  # model checkpoint for GPT-2 Large

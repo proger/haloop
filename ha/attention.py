@@ -29,6 +29,38 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 
+class StableEmbedding(nn.Embedding):
+    def __init__(
+        self, num_embeddings, embedding_dim, padding_idx=None,
+        max_norm=None, norm_type=2.0, scale_grad_by_freq=False,
+        sparse=False, _weight=None, device=None, dtype=None
+    ):
+        super().__init__(
+            num_embeddings, embedding_dim, padding_idx,
+            max_norm, norm_type, scale_grad_by_freq,
+            sparse, _weight, device, dtype
+        )
+        self.norm = nn.LayerNorm(embedding_dim, device=device)
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.weight)
+        self._fill_padding_idx_with_zero()
+
+    def _fill_padding_idx_with_zero(self):
+        if self.padding_idx is not None:
+            with torch.no_grad():
+                self.weight[self.padding_idx].fill_(0)
+
+    def forward(self, input):
+        emb = F.embedding(
+            input, self.weight, self.padding_idx,
+            self.max_norm, self.norm_type,
+            self.scale_grad_by_freq, self.sparse
+        )
+        emb = emb.to(torch.get_default_dtype())
+        return self.norm(emb).to(self.weight.dtype)
+
+
 def attend_cached(q, k, v, past=None, measure_entropy=False, is_causal=False, dropout_p=0.0):
     T = q.size(-2)
 
@@ -153,15 +185,7 @@ class GPT(nn.Module):
         super().__init__()
         self.config = config
 
-        if self.config.stable_embedding:
-            try:
-                import bitsandbytes as bnb
-            except ImportError:
-                print("Please install bitsandbytes with: pip install bitsandbytes", file=sys.stderr)
-                raise
-            embedding = bnb.nn.StableEmbedding
-        else:
-            embedding = nn.Embedding
+        embedding = StableEmbedding if self.config.stable_embedding else nn.Embedding
 
         self.transformer = nn.ModuleDict(dict(
             wte = embedding(config.vocab_size, config.n_embd),
