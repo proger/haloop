@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
   "click",
   "g2p-en",
+  "gnureadline",
   "kaldialign",
   "rich",
   "torch",

@@ -324,7 +324,7 @@ def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, stop_
 @torch.inference_mode()
 def main():
     import argparse
-    import readline
+    import gnureadline as readline
     import time
 
     try:
