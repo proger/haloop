@@ -144,10 +144,10 @@ if args.lora:
 model.to(device)
 
 # optimizer
-optimizer = configure_optimizers(model, args.weight_decay, args.learning_rate, (args.beta1, args.beta2), device_type)
+optimizer = configure_optimizers(model, args, device_type)
 
 # compile the model
-if compile:
+if args.compile:
     print("Compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model)  # requires PyTorch 2.0

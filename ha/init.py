@@ -261,10 +261,16 @@ class Initializer:
 
     def __call__(self, args, make_module = lambda x: x):
         epoch, global_step = 0, 0
-        module = create_model(args.arch, compile=False).to(args.device)
-        module = make_module(module)
 
-        if args.init:
+        if args.arch == "uk4b":
+            assert args.init, "pass --init ckpt10m.pt"
+            module = load_model(*args.init)
+
+            log("initializing uk4b model")
+        elif args.init:
+            module = create_model(args.arch, compile=False).to(args.device)
+            module = make_module(module)
+
             checkpoint = torch.load(args.init[0], map_location=args.device)
             module.load_state_dict(checkpoint)
             if len(args.init) > 1:
@@ -280,6 +286,9 @@ class Initializer:
                 epoch = checkpoint.get('epoch', -1) + 1
                 global_step = checkpoint.get('global_step', -1) + 1
         else:
+            module = create_model(args.arch, compile=False).to(args.device)
+            module = make_module(module)
+
             log('initializing randomly')
 
         if args.compile:
