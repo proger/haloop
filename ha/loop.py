@@ -57,7 +57,7 @@ class System(nn.Module):
         self.vocab = vocab
 
         self.optimizer = configure_optimizers(self, args, device_type='cuda', decay_lm_head=False)
-        self.scaler = torch.cuda.amp.GradScaler()
+        self.scaler = torch.amp.GradScaler()
         self.lr = LR(args)
 
     def load_state_dict(self, checkpoint):

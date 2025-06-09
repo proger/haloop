@@ -1,6 +1,8 @@
 from ha import argparse
 import math
+import pathlib
 from pathlib import Path
+import sys
 
 from rich.console import Console
 import torch
@@ -8,20 +10,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 
-from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, SymbolTape, load_u16, SymbolTapeNoPad
+from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, load_u16, SymbolTapeNoPad
 from .rnn import Decoder
 
-console = Console()
+console = Console(log_path=False)
 def print(*args, flush=False, **kwargs):
-    console.log(*args, **kwargs)
-
+    console.print(*args, **kwargs)
 
 
 def make_dataset(
     args,
     vocab=None,
     extend_vocab=False,
-    pad_id=0,
 ):
     batch_size, bptt_len = args.batch_size, args.bptt_len
     match str(args.train).rsplit(':', maxsplit=1):
@@ -35,11 +35,11 @@ def make_dataset(
             return SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len), vocab
         case ['bytes', path]:
             data, vocab = tokenize_bytes(path, vocab, extend_vocab=extend_vocab)
-            dataset = SymbolTape(data, batch_size=batch_size, bptt_len=bptt_len, pad_id=pad_id)
+            dataset = SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len)
             return dataset, vocab
-        case ['chars', path]:
+        case ['chars', path] | [path]:
             data, vocab = tokenize_chars(path, vocab, extend_vocab=extend_vocab)
-            dataset = SymbolTape(data, batch_size=batch_size, bptt_len=bptt_len, pad_id=pad_id)
+            dataset = SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len)
             return dataset, vocab
 
 
@@ -48,19 +48,22 @@ class System:
         self.vocab = None
 
         if args.init:
-            checkpoint = torch.load(args.init)
+            torch.serialization.safe_globals([pathlib._local.PosixPath])
+
+            checkpoint = torch.load(args.init, weights_only=False)
             self.vocab = Vocabulary()
             self.vocab.load_state_dict(checkpoint['vocab'])
             extend_vocab = False
+            self.step = checkpoint.get('step', 0)
         else:
             extend_vocab = True
+            self.step = 0
 
         if args.train:
             self.dataset, self.vocab = make_dataset(
                 args,
                 self.vocab,
                 extend_vocab=extend_vocab,
-                pad_id=0,
             )
 
             self.batches = torch.utils.data.DataLoader(
@@ -87,15 +90,16 @@ class System:
         if args.init:
             self.model.load_state_dict(checkpoint['model'])
 
-        self.optimizer = torch.optim.AdamW(params=self.model.parameters(), lr=args.lr, weight_decay=0.01)
+        self.optimizer = torch.optim.AdamW(params=self.model.parameters(), lr=args.lr, weight_decay=args.wd)
         if args.init:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
-        self.scaler = torch.cuda.amp.GradScaler()
         if args.init:
-            self.scaler.load_state_dict(checkpoint['scaler'])
-
-        self.loss = nn.CrossEntropyLoss(ignore_index=0)
+            self.state = checkpoint['state']
+            self.prompt = checkpoint['prompt']
+        else:
+            self.state = self.model.init_hidden(args.batch_size)
+            self.prompt = torch.zeros((1, args.batch_size), dtype=torch.long, device=args.device)
 
         self.log_interval = args.log_interval
         self.args = args
@@ -106,7 +110,9 @@ class System:
             'vocab': self.vocab.state_dict(),
             'model': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
-            'scaler': self.scaler.state_dict(),
+            'step': self.step,
+            'state': self.state,
+            'prompt': self.prompt,
         }
 
     def prepare_prompt(self, prompt):
@@ -129,109 +135,121 @@ class System:
         prompt_logits = nn.functional.cross_entropy(logits[:-1], x[1:].view(-1), reduction='none').sum()
         prompt_logits_base2 = prompt_logits / math.log(2)
         prompt_bits_per_token = prompt_logits_base2 / len(x[1:])
+        out_list = self.sample(logits, states, steps=steps, topk=topk)
+        return prompt_bits_per_token, joiner.join(out_list)
 
-        if steps > 0:
-            out_list = []
-            joiner = ''
-            def cast(s):
-                nonlocal joiner
-                if isinstance(s, int):
-                    joiner = b''
-                    return s.to_bytes(1, 'big')
-                elif isinstance(s, bytes):
-                    joiner = b''
-                    return s
+    def sample(self, logits, states, steps=512, top_k=1):
+        if steps <= 0:
+            return []
+
+        model = self.model
+
+        out_list = []
+        joiner = ''
+        def cast(s):
+            nonlocal joiner
+            if isinstance(s, int):
+                joiner = b''
+                return s.to_bytes(1, 'big')
+            elif isinstance(s, bytes):
+                joiner = b''
                 return s
+            return s
 
-            # sample first token
+        # sample first token
+        v, _ = torch.topk(logits, top_k)
+        logits[logits < v[:, [-1]]] = -float('Inf')
+        probs = F.softmax(logits, dim=-1)
+        probs = probs[-1]
+
+        ix = probs.multinomial(num_samples=1)
+
+        # output first token only if we're asked to generate any samples
+        out_list.append(cast(self.vocab.id_to_string[int(ix)]))
+        x = ix.unsqueeze(1)
+
+        # generate remaining tokens
+        for k in range(steps-1):
+            logits, states = model(x, states)
             v, _ = torch.topk(logits, top_k)
             logits[logits < v[:, [-1]]] = -float('Inf')
             probs = F.softmax(logits, dim=-1)
-            probs = probs[-1]
-
             ix = probs.multinomial(num_samples=1)
-
-            # output first token only if we're asked to generate any samples
             out_list.append(cast(self.vocab.id_to_string[int(ix)]))
-            x = ix.unsqueeze(1)
+            x = ix
 
-            # generate remaining tokens
-            for k in range(steps-1):
-                logits, states = model(x, states)
-                v, _ = torch.topk(logits, top_k)
-                logits[logits < v[:, [-1]]] = -float('Inf')
-                probs = F.softmax(logits, dim=-1)
-                ix = probs.multinomial(num_samples=1)
-                out_list.append(cast(self.vocab.id_to_string[int(ix)]))
-                x = ix
+        return joiner.join(out_list)
 
-            return prompt_bits_per_token, joiner.join(out_list)
-        else:
-            return prompt_bits_per_token, []
-
-    def train_one_epoch(self, epoch=0, step=0):
+    def train_one_epoch(self, step=0):
         model, batches = self.model, self.batches
-        optimizer, scaler, loss_fn = self.optimizer, self.scaler, self.loss
+        optimizer = self.optimizer
 
-        state = model.init_hidden(self.args.batch_size)
         model.train()
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
+        state = self.state
+        prompt = self.prompt
+        hyp = ''
 
-        for i, batch in enumerate(batches, start=step):
+        for i, batch in enumerate(batches):
+            if step > i:
+                continue
+
             batch = batch.to(self.args.device).long().squeeze(0)
+            input = torch.cat([prompt, batch[:-1]], dim=0)
+            prompt = batch[-1:]
+
+            output, state = model(input, state)
+            loss = F.cross_entropy(output, batch.reshape(-1), ignore_index=0, reduction='mean')
             state = model.truncate_hidden(state)
 
-            input = batch[:-1]
-            target = batch[1:].reshape(-1)
-
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                output, state = model(input, state)
-                loss = loss_fn(output, target)
-
-            if torch.isnan(loss):
-                print(f'[{epoch + 1}, {i + 1:5d}], loss is nan, skipping batch', flush=True)
-                scaler.update()
-                continue
-
-            if torch.isinf(loss):
-                print(f'[{epoch + 1}, {i + 1:5d}], loss is inf, skipping batch, skipping scaler update', flush=True)
-                continue
-
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
+            loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-            if torch.isinf(grad_norm) or torch.isnan(grad_norm):
-                print(f'[{epoch + 1}, {i + 1:5d}], grad_norm is inf or nan, skipping batch', flush=True)
-                scaler.update()
-                optimizer.zero_grad(set_to_none=True)
-                continue
 
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
             if i % self.log_interval == 0:
-                _, outputs = self.evaluate()
                 train_bpc = loss.item() / math.log(2)
-                print(f"epoch {epoch} step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} bpc: {train_bpc:.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(outputs)}")
-                wandb.log({'train/loss': loss.item(),
-                           'train/ppl': loss.exp().item(),
-                           'train/lr': self.args.lr,
-                           'train/epoch': epoch,
-                           'train/grad_norm': grad_norm.item()})
+
+                def erase(count):
+                    for _ in range(count):
+                        sys.stdout.write("\b \b")  # backspace + space + backspace (to erase)
+
+                if self.args.hyp:
+                    ref = self.vocab.decode(input.squeeze().tolist())[0]
+
+                    def longest_common_prefix(a, b):
+                        i = 0
+                        while i < min(len(a), len(b)) and a[i] == b[i]:
+                            i += 1
+                        return a[:i], a[i:], b[i:]
+
+                    matched, delete, insert = longest_common_prefix(hyp, ref)
+                    print(f"[cyan]{matched}[/cyan][magenta]{delete}[/magenta]{insert}", end='')
+                    with torch.inference_mode():
+                        model.eval()
+                        hyp = self.sample(output, state, steps=self.args.bptt_len, top_k=self.args.top_k)
+                    model.train()
+                    #print(f"{input_text}[blue]{hyp}[/blue] [dim]ppl: {loss.exp().item():.3f} step {i}/{len(batches)}", end='')
+                else:
+                    _, eval_outputs = self.evaluate()
+
+                    print(f"step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} bpc: {train_bpc:.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(eval_outputs)}")
+
                 model.train()
-            else:
-                wandb.log({'train/loss': loss.item(),
-                           'train/ppl': loss.exp().item(),
-                           #'train/lr': scheduler.get_last_lr()[0],
-                           'train/lr': self.args.lr,
-                           'train/epoch': epoch,
-                           'train/grad_norm': grad_norm.item()})
+            wandb.log({'train/loss': loss.item(),
+                       'train/ppl': loss.exp().item(),
+                       'train/lr': self.args.lr,
+                       'train/grad_norm': grad_norm.item()})
+
+            self.step = i + 1
+            self.state = state
+            self.prompt = prompt
 
             if self.args.max_steps >= 0 and i == self.args.max_steps:
                 break
 
-        return i+1
+        return self.step
 
     def evaluate(self):
         prompt_scores = []
@@ -263,6 +281,15 @@ class System:
 def main():
     parser = argparse.ArgumentParser(description="hal trains recurrent language models",
                                      formatter_class=argparse.Formatter, epilog="""\
+To train a RNN on characters:
+% hal --train bruk.txt --hyp
+
+To train a RNN on bytes:
+% hal --train bytes:bruk.txt --hyp
+
+To train a RNN on 16-bit words (like https://huggingface.co/datasets/darkproger/uk4b/tree/main):
+% hal --train u16:bruk.txt --hyp
+
 To produce 10-token completions of two strings try:
 % hal --init librispeech-1024.pt --rnn-size 1024 --bptt-len 10 --complete "IS THIS A BIRD" "IS THIS A PLANE"
 
@@ -273,19 +300,20 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 """)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--save', type=Path, default='rnnlm.pt', help="Path to save checkpoint to")
-    parser.add_argument('--device', type=str, default='cuda:1', help='device')
-    parser.add_argument('--lr', default=0.002, type=float, help='Adam learning rate')
+    parser.add_argument('--device', type=str, default='cpu', help='device')
+    parser.add_argument('--lr', default=0.002, type=float, help='AdamW learning rate')
+    parser.add_argument('--wd', default=0.1, type=float, help='AdamW weight decay')
     parser.add_argument('--dropout', default=0, type=float, help='dropout rate')
-    parser.add_argument('--epochs', default=1, type=int, help='number of training set iterations')
-    parser.add_argument('--max-steps', default=-1, type=int, help='maximum number of training steps per epoch (useful for e.g. lr search)')
-    parser.add_argument('--batch-size', default=1280, type=int, help='batch size')
-    parser.add_argument('--bptt-len', default=256, type=int, help='RNN sequence length (window size)')
-    parser.add_argument('--rnn-size', default=2048, type=int, help='RNN width')
+    parser.add_argument('--max-steps', default=-1, type=int, help='maximum number of training steps (useful for e.g. lr search)')
+    parser.add_argument('--batch-size', default=1, type=int, help='batch size')
+    parser.add_argument('--bptt-len', default=64, type=int, help='RNN sequence length (window size)')
+    parser.add_argument('--rnn-size', default=512, type=int, help='RNN width')
     parser.add_argument('--num-layers', default=1, type=int, help='RNN depth')
     parser.add_argument('--vocab', default='auto', type=str, help='how to build vocabulary')
     parser.add_argument('--train', type=str, help='Train model on this data')
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
-    parser.add_argument('--log-interval', type=int, default=100, help="Number of batches between printing training status")
+    parser.add_argument('--log-interval', type=int, default=1, help="Number of batches between printing training status")
+    parser.add_argument('--hyp', action='store_true', help="Continue the training data for bptt_len steps for visualization. Supersedes --complete/--complete-file.")
     parser.add_argument('--complete', type=str, nargs='+', help="Prompts to complete during evaluation")
     parser.add_argument('--start-token', type=str, default='\n', help="Prepend this token to every prompt. This token is necessary to compute p(prompt|start-token)")
     parser.add_argument('--complete-file', type=Path, nargs='+', help="Prompts to complete during evaluation as a file. First column is utterance id.")
@@ -300,19 +328,20 @@ To compute BPC on evaluation data from files (first column is ignored) try:
         print(args)
         wandb.init(project='rnnlm', config=args)
 
-        step = 0
         try:
-            for epoch in range(args.epochs):
-                step = self.train_one_epoch(epoch=epoch, step=step)
-                torch.save(self.make_state_dict(), args.save)
-        except KeyboardInterrupt:
-            print('interrupted, saving')
+            self.train_one_epoch(step=self.step)
+            print('saving', args.save)
             torch.save(self.make_state_dict(), args.save)
+        except KeyboardInterrupt:
+            print('saving', args.save)
+            torch.save(self.make_state_dict(), args.save)
+        print('resume training with --init', args.save)
 
     prompt_scores, outputs = self.evaluate()
-    for prompt_score, output in zip(prompt_scores, outputs):
-        print('{:.2f}'.format(prompt_score), 'bpc', output)
-    print('mean bpc', torch.mean(prompt_scores).item())
+    if prompt_scores.numel():
+        for prompt_score, output in zip(prompt_scores, outputs):
+            print('{:.2f}'.format(prompt_score), 'bpc', output)
+        print('mean bpc', torch.mean(prompt_scores).item())
 
 if __name__ == '__main__':
     main()
