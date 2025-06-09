@@ -278,50 +278,6 @@ class SymbolTapeNoPad:
         return batch
 
 
-class SymbolTape:
-    def __init__(self, data, batch_size, bptt_len, pad_id):
-        self.batch_size = batch_size
-        self.bptt_len = bptt_len
-        self.pad_id = pad_id
-        self.tape_len = math.ceil(len(data) / batch_size + 1)
-        self.tape_parts, self.trailing_tokens = divmod(self.tape_len, bptt_len)
-        self.data = data
-
-    def __len__(self):
-        return self.tape_parts + int(bool(self.trailing_tokens))
-
-    def __getitem__(self, i):
-        if i == 0:
-            # first batch: add pad_id token in the beginning
-            batch = self.data.new_full((self.bptt_len, self.batch_size), self.pad_id)
-
-            for tape_index in range(self.batch_size):
-                offset = tape_index * (self.tape_len - 1)
-                # remove one for padding
-                part = self.data[offset + i*self.bptt_len:offset + (i+1) * self.bptt_len - 1]
-                batch[1:len(part)+1, tape_index] = part
-        elif i == self.tape_parts:
-            # last batch: truncate
-            batch = self.data.new_full((self.trailing_tokens, self.batch_size), self.pad_id)
-
-            for tape_index in range(self.batch_size):
-                # remove one for the padding in batch 0
-                offset = tape_index * (self.tape_len - 1) - 1
-                part = self.data[offset + i*self.bptt_len:offset + i*self.bptt_len + self.trailing_tokens]
-                batch[:len(part), tape_index] = part
-        else:
-            # other batches: account for the padding in batch 0
-            batch = self.data.new_full((self.bptt_len, self.batch_size), self.pad_id)
-
-            for tape_index in range(self.batch_size):
-                # remove one
-                offset = tape_index * (self.tape_len - 1) - 1
-                part = self.data[offset + i*self.bptt_len:offset + (i+1) * self.bptt_len]
-                batch[:len(part), tape_index] = part
-
-        return batch
-
-
 def make_vocab(vocab_descriptor):
     "Possible values: bytes|ascii|cmu|xen|words:path/to/words.txt|path/to/words.txt"
 
@@ -350,9 +306,7 @@ def make_vocab(vocab_descriptor):
 
 
 if __name__ == '__main__':
-    tape = SymbolTapeNoPad(torch.as_tensor(bytearray(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv")),
-                      batch_size=3, bptt_len=8)
-                      #batch_size=256, bptt_len=2, pad_id=0)
+    tape = SymbolTapeNoPad(torch.as_tensor(bytearray(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv")), batch_size=2, bptt_len=8)
     for i in range(len(tape)):
         print(tape[i], tape[i].shape)
 
