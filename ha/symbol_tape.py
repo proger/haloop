@@ -232,7 +232,7 @@ def tokenize_words(text_file, vocab, extend_vocab=True, device='cpu'):
             full_text.append(vocab.get_idx(token, extend_vocab=extend_vocab))
     samples = min(32, len(vocab))
     print(f"Vocabulary size {len(vocab)}, samples: {' '.join([vocab.id_to_string[i] for i in range(samples)])} ...", file=sys.stderr)
-    data = torch.tensor(full_text, device=device, dtype=torch.int16)
+    data = torch.tensor(full_text, device=device, dtype=torch.int)
     return data, vocab
 
 

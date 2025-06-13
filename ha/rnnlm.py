@@ -10,10 +10,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 
-from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, load_u16, SymbolTapeNoPad
+from .symbol_tape import Vocabulary, tokenize_bytes, tokenize_chars, load_u16, SymbolTapeNoPad, tokenize_words
 from .rnn import Decoder
 
-console = Console(log_path=False)
+console = Console(log_path=False, highlight=False)
 def print(*args, flush=False, **kwargs):
     console.print(*args, **kwargs)
 
@@ -37,6 +37,11 @@ def make_dataset(
             data, vocab = tokenize_bytes(path, vocab, extend_vocab=extend_vocab)
             dataset = SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len)
             return dataset, vocab
+        case ['words', path]:
+            assert isinstance(args.vocab, str), "vocab should be a file with vocabulary entries, one per line"
+            data, vocab = tokenize_words(args.vocab, vocab, extend_vocab=extend_vocab)
+            dataset = SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len)
+            return dataset, vocab
         case ['chars', path] | [path]:
             data, vocab = tokenize_chars(path, vocab, extend_vocab=extend_vocab)
             dataset = SymbolTapeNoPad(data, batch_size=batch_size, bptt_len=bptt_len)
@@ -58,6 +63,9 @@ class System:
         else:
             extend_vocab = True
             self.step = 0
+
+        if args.reset_step is not None:
+            self.step = args.reset_step
 
         if args.train:
             self.dataset, self.vocab = make_dataset(
@@ -90,7 +98,7 @@ class System:
         if args.init:
             self.model.load_state_dict(checkpoint['model'])
 
-        self.optimizer = torch.optim.AdamW(params=self.model.parameters(), lr=args.lr, weight_decay=args.wd)
+        self.optimizer = torch.optim.AdamW(params=self.model.parameters(), lr=args.lr, weight_decay=args.wd, betas=(0.9, 0.999))
         if args.init:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
@@ -299,6 +307,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 ␄
 """)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
+    parser.add_argument('--reset-step', type=int, help="Rewind data to this step")
     parser.add_argument('--save', type=Path, default='rnnlm.pt', help="Path to save checkpoint to")
     parser.add_argument('--device', type=str, default='cpu', help='device')
     parser.add_argument('--lr', default=0.002, type=float, help='AdamW learning rate')
