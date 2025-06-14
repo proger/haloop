@@ -99,7 +99,7 @@ def configure_optimizers(self, args, device_type='cuda', decay_lm_head=True):
                 # weights of blacklist modules will NOT be weight decayed
                 no_decay.add(fpn)
             else:
-                raise ValueError(f"how to deal with this parameter? {fpn} in {m}")
+                continue # parameters are recursive
 
     if decay_lm_head:
         # for decoder-only models with tied outputs:
