@@ -95,6 +95,7 @@ def create_model(arch: str, compile: bool = True):
     Model architectures to initialize. Possible options:
 
         decoder
+        decoder:vocab_size
         encoder
         lstm
         rnnlm
@@ -107,6 +108,9 @@ def create_model(arch: str, compile: bool = True):
     match arch.split(':'):
         case ['decoder']:
             gptconf = GPTConfig()
+            model = GPT(gptconf)
+        case ['decoder', vocab_size]:
+            gptconf = GPTConfig(vocab_size=int(vocab_size))
             model = GPT(gptconf)
         case ['encoder']:
             gptconf = GPTConfig(block_size=128, causal=False)
