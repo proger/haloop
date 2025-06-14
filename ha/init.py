@@ -295,8 +295,9 @@ class Initializer:
 
             log('initializing randomly')
 
-        if args.compile:
-            module = torch.compile(module, mode='reduce-overhead')
+        ## compile after initializing!
+        #if args.compile:
+        #    module = torch.compile(module, mode='reduce-overhead')
 
         log('model parameters', sum(p.numel() for p in module.parameters() if p.requires_grad))
 
