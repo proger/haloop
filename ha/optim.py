@@ -6,7 +6,7 @@ import inspect
 import math
 import torch
 
-from .attention import LayerNorm
+from .attention import LayerNorm, StableEmbedding
 
 
 class LR:
@@ -80,7 +80,7 @@ def configure_optimizers(self, args, device_type='cuda', decay_lm_head=True):
     decay = set()
     no_decay = set()
     whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv1d)
-    blacklist_weight_modules = (torch.nn.LayerNorm, LayerNorm, torch.nn.Embedding)
+    blacklist_weight_modules = (torch.nn.LayerNorm, LayerNorm, torch.nn.Embedding, StableEmbedding)
     for mn, m in self.named_modules():
         for pn, p in m.named_parameters():
             fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
@@ -98,6 +98,8 @@ def configure_optimizers(self, args, device_type='cuda', decay_lm_head=True):
             elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                 # weights of blacklist modules will NOT be weight decayed
                 no_decay.add(fpn)
+            else:
+                raise ValueError(f"how to deal with this parameter? {fpn}")
 
     if decay_lm_head:
         # for decoder-only models with tied outputs:
@@ -108,7 +110,10 @@ def configure_optimizers(self, args, device_type='cuda', decay_lm_head=True):
         # will only return the first occurence, key'd by 'transformer.wte.weight', below.
         # so let's manually remove 'lm_head.weight' from decay set. This will include
         # this tensor into optimization via transformer.wte.weight only, and not decayed.
-        decay.remove('lm_head.weight')
+        try:
+            decay.remove('lm_head.weight')
+        except:
+            print(f"could not remove lm_head.weight from {decay} in {self}")
 
     # validate that we considered every parameter
     param_dict = {pn: p for pn, p in self.named_parameters()}
