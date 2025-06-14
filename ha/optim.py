@@ -17,44 +17,52 @@ class LR:
     def add_arguments(cls, parser):
         parser.add_argument('--lr', type=float, default=3e-4, help='AdamW learning rate')
         parser.add_argument('--lr_schedule', type=str, choices=['const', 'cosine', 'linear'], default='cosine', help='Learning rate schedule')
-        parser.add_argument('--warmup_iters', type=int, default=2000, help='Number of warm-up steps')
-        parser.add_argument('--lr_decay_iters', type=int, default=200000, help='Number of steps for learning rate decay')
+        parser.add_argument('--warmup_iters', default=2000, help='Number or fraction of warm-up steps')
+        parser.add_argument('--lr_decay_iters', default=200000, help='Number or fraction of steps for learning rate decay')
         parser.add_argument('--min_lr', type=float, default=6e-5, help='Minimum learning rate')
         parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
         parser.add_argument('--beta1', type=float, default=0.9, help='Decay factor for first gradient moment')
         parser.add_argument('--beta2', type=float, default=0.99, help='Decay factor for second gradient moment')
 
-    def get_lr(self, it):
+    def get_lr(self, it, total_steps=200000):
         args = self.args
+
+        warmup_iters = args.warmup_iters
+        if isinstance(warmup_iters, float):
+            warmup_iters = int(total_steps * warmup_iters)
+
+        lr_decay_iters = args.lr_decay_iters
+        if isinstance(lr_decay_iters, float):
+            lr_decay_iters = int(total_steps * lr_decay_iters)
 
         match args.lr_schedule:
             case 'const':
                 return args.lr
             case 'cosine':
                 # 1) linear warmup for warmup_iters steps
-                if it < args.warmup_iters:
-                    return args.lr * it / args.warmup_iters
+                if it < warmup_iters:
+                    return args.lr * it / warmup_iters
                 # 2) if it > lr_decay_iters, return min learning rate
-                if it > args.lr_decay_iters:
+                if it > lr_decay_iters:
                     return args.min_lr
                 # 3) in between, use cosine decay down to min learning rate
-                decay_ratio = (it - args.warmup_iters) / (args.lr_decay_iters - args.warmup_iters)
+                decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
                 assert 0 <= decay_ratio <= 1
                 coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
                 return args.min_lr + coeff * (args.lr - args.min_lr)
             case 'linear':
-                if it < args.warmup_iters:
-                    return args.lr * it / args.warmup_iters
-                if it > args.lr_decay_iters:
+                if it < warmup_iters:
+                    return args.lr * it / warmup_iters
+                if it > lr_decay_iters:
                     return args.min_lr
-                return args.lr - (it - args.warmup_iters) * (args.lr - args.min_lr) / (args.lr_decay_iters - args.warmup_iters)
+                return args.lr - (it - warmup_iters) * (args.lr - args.min_lr) / (lr_decay_iters - warmup_iters)
             case 'noam':
                 # XXX: this schedule ignores args.lr and args.min_lr
-                d_model = 512
-                return d_model * min(it ** (-0.5), it * args.warmup_iters ** (-1.5))
+                d_model = 768
+                return d_model * min(it ** (-0.5), it * warmup_iters ** (-1.5))
 
-    def apply_lr_(self, optimizer, step):
-        lr = self.get_lr(step)
+    def apply_lr_(self, optimizer, step, total_steps=200000):
+        lr = self.get_lr(step, total_steps=total_steps)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         return lr
