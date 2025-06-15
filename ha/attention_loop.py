@@ -40,7 +40,7 @@ parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="
 parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
 parser.add_argument("--block_size", type=int, default=1024, help="Block size")
 
-parser.add_argument("--max_iters", type=int_or_float, default=200000, help="Total number of training iterations")
+parser.add_argument("--max_iters", type=int_or_float, default=1.0, help="Total number of training iterations (fraction of training data size if float)")
 parser.add_argument("--grad_clip", type=float, default=1.0, help="Value to clip gradients at, set to 0.0 to disable")
 
 parser.add_argument("--lora", action="store_true", help="Train LoRA adapter")
