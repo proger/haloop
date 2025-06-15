@@ -6,6 +6,7 @@ from functools import reduce
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, help='bpe model filename')
 parser.add_argument('--block', type=int, help='one document per line, padded up to this many tokens')
+parser.add_argument('--repeat', default=1, type=int, help='repeat the output this many times')
 parser.add_argument('input_txt', type=str)
 parser.add_argument('output_bin', type=str)
 args = parser.parse_args()
@@ -37,6 +38,9 @@ else:
     else:
         ids = list(bytes)
     real_bytes = len(bytes)
+
+ids = ids * args.repeat
+real_bytes = real_bytes * args.repeat
 
 arr = np.memmap(args.output_bin, dtype=np.uint16, mode='w+', shape=(len(ids),))
 arr[:] = ids
