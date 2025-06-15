@@ -153,7 +153,6 @@ if args.compile:
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
-# helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
 def evaluate():
     model.eval()
