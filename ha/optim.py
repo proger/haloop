@@ -33,7 +33,7 @@ class LR:
         else:
             warmup_iters = int(warmup_iters)
 
-        lr_decay_iters = args.lr_decay_iters
+        lr_decay_iters = float(args.lr_decay_iters)
         if warmup_iters <= 1.0:
             lr_decay_iters = int(total_steps * lr_decay_iters)
         else:
