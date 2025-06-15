@@ -212,7 +212,8 @@ class GPT(nn.Module):
         b, t = input_ids.size()
         if past is None:
             t0 = 0
-            past = torch.zeros(self.config.n_layer, 2, b, self.config.n_head, t0, self.config.n_embd // self.config.n_head, device=device)
+            #past = torch.zeros(self.config.n_layer, 2, b, self.config.n_head, t0, self.config.n_embd // self.config.n_head, device=device)
+            past = [None] * self.config.n_layer
         else:
             t0 = past.size(-2)
             t = t0 + t
