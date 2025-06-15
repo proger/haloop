@@ -284,7 +284,7 @@ class Initializer:
                 module = nn.ModuleDict({'_orig_mod': module})
             module.load_state_dict(checkpoint)
             if compiled:
-                module = module._orid_mod
+                module = module._orig_mod
             if len(args.init) > 1:
                 log('averaging models')
                 avg_model = torch.optim.swa_utils.AveragedModel(module)
