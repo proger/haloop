@@ -161,8 +161,8 @@ def evaluate():
         with ctx:
             loss = model.forward_all(X, Y)
 
-        losses[k] = loss.item() * Y.sum().item()
-        counts[k] = Y.sum().item()
+        losses[k] = loss.item() * (Y > 0).sum().item()
+        counts[k] = (Y > 0).sum().item()
     val_loss = losses.sum() / counts.sum()
     val_bpb = (losses.sum() / args.eval_bytes) / math.log(2)
 
