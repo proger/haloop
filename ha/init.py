@@ -110,7 +110,7 @@ def create_model(arch: str, compile: bool = True):
             gptconf = GPTConfig()
             model = GPT(gptconf)
         case ['decoder', vocab_size]:
-            gptconf = GPTConfig(vocab_size=int("".join(filter(str.isdigit, vocab_size))))
+            gptconf = GPTConfig(block_size=2048, vocab_size=int("".join(filter(str.isdigit, vocab_size))))
             model = GPT(gptconf)
         case ['encoder']:
             gptconf = GPTConfig(block_size=128, causal=False)
