@@ -28,6 +28,7 @@ parser = ArgumentParser(description="hala trains attention models", formatter_cl
 Initializer.add_arguments(parser)
 parser.add_argument("--train", type=str, help="Path to training data")
 parser.add_argument("--eval", type=str, help="Path to validation data")
+parser.add_argument("--eval_bytes", default=0.0, type=float, help="How many payload bytes the evaluation set contains")
 parser.add_argument("--objective", choices=["lm", "denoise", "cond"], default="lm", type=str, help="lm: predict next token; denoise: predict masked tokens; cond: predict one last token in the sequence")
 parser.add_argument("--train-shuffle", action='store_true', help="If True, randomly samples batches from the training set")
 
@@ -153,15 +154,20 @@ def evaluate():
     model.eval()
     eval_iters = len(val_data) // args.block_size // args.batch_size
     losses = torch.zeros(eval_iters)
+    counts = torch.zeros(eval_iters)
     for k in range(eval_iters):
         X, Y = get_batch(val_data, k)
 
         with ctx:
             loss = model.forward_all(X, Y)
 
-        losses[k] = loss.item()
+        losses[k] = loss.item() * Y.sum().item()
+        counts[k] = Y.sum().item()
+    val_loss = losses.sum() / counts.sum()
+    val_bpb = (losses.sum() / args.eval_bytes) / math.log(2)
+
     model.train()
-    return losses.mean()
+    return val_loss, val_bpb
 
 lr_ctl = LR(args)
 
@@ -225,9 +231,10 @@ while args.train:
 
         # evaluate the loss on train/val sets and write checkpoints
         if iter_num and iter_num % args.eval_interval == 0:
-            val_loss = evaluate()
+            val_loss, val_bpb = evaluate()
             print(f"eval {iter_num}: val loss {val_loss:.4f}")
             log_dict["val/loss"] = val_loss
+            log_dict["val/bpb"] = val_bpb
             if not math.isnan(val_loss):
                 raw_model = model.module if ddp else model
                 checkpoint(loss=val_loss, epoch=iter_num, checkpoint_fn=lambda: {
@@ -236,6 +243,7 @@ while args.train:
                     'model_args': raw_model.config.state_dict(),
                     'iter_num': iter_num,
                     'val_loss': val_loss,
+                    'val_bpb': val_bpb,
                     'args': args,
                 })
             else:
