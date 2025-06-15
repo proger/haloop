@@ -201,7 +201,7 @@ while args.train:
         print("loss is NaN, skipping this update")
         continue
 
-    lr = lr_ctl.apply_lr_(optimizer, iter_num, train_updates)
+    lr = lr_ctl.apply_lr_(optimizer, iter_num, max_iters)
 
     log_dict = {}
 
