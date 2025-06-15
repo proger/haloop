@@ -18,7 +18,7 @@ class LR:
         parser.add_argument('--lr', type=float, default=3e-4, help='AdamW learning rate')
         parser.add_argument('--lr_schedule', type=str, choices=['const', 'cosine', 'linear'], default='cosine', help='Learning rate schedule')
         parser.add_argument('--warmup_iters', default=2000, help='Number or fraction of warm-up steps')
-        parser.add_argument('--lr_decay_iters', default=200000, help='Number or fraction of steps for learning rate decay')
+        parser.add_argument('--lr_decay_iters', default=200000, help='Number or fraction (<= 1.0) of steps for learning rate decay')
         parser.add_argument('--min_lr', type=float, default=6e-5, help='Minimum learning rate')
         parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
         parser.add_argument('--beta1', type=float, default=0.9, help='Decay factor for first gradient moment')
@@ -27,13 +27,17 @@ class LR:
     def get_lr(self, it, total_steps=200000):
         args = self.args
 
-        warmup_iters = args.warmup_iters
-        if isinstance(warmup_iters, float):
+        warmup_iters = float(args.warmup_iters)
+        if warmup_iters <= 1.0:
             warmup_iters = int(total_steps * warmup_iters)
+        else:
+            warmup_iters = int(warmup_iters)
 
         lr_decay_iters = args.lr_decay_iters
-        if isinstance(lr_decay_iters, float):
+        if warmup_iters <= 1.0:
             lr_decay_iters = int(total_steps * lr_decay_iters)
+        else:
+            lr_decay_iters = int(lr_decay_iters)
 
         match args.lr_schedule:
             case 'const':
