@@ -175,12 +175,13 @@ if args.wandb and master_process:
     import wandb
     wandb.init(config=args)
 
-train_batches = len(train_data) // args.block_size // args.batch_size // args.gradient_accumulation_steps
+train_updates = len(train_data) // args.block_size // args.batch_size
+train_batches = train_updates // args.gradient_accumulation_steps
 
 X, Y = get_batch(train_data, iter_num * args.gradient_accumulation_steps) # fetch the very first batch
 if master_process:
     print("Trainable params", sum(p.numel() for p in model.parameters() if p.requires_grad))
-    print("Train batches:", train_batches)
+    print("Train batches, updates:", train_batches, train_updates)
     print(f"Tokens per step, update:", X.numel(), X.numel() * args.gradient_accumulation_steps)
 
 t0 = time.time()
@@ -205,7 +206,7 @@ while args.train:
         print("loss is NaN, skipping this update")
         continue
 
-    lr = lr_ctl.apply_lr_(optimizer, iter_num)
+    lr = lr_ctl.apply_lr_(optimizer, iter_num, train_updates)
 
     log_dict = {}
 
