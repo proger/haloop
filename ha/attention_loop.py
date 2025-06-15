@@ -5,7 +5,6 @@
 # and https://github.com/proger/uk4b/blob/main/train.py
 #
 #
-import argparse
 import os
 import time
 import math
@@ -18,18 +17,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from . import lora
+from .argparse import Formatter, int_or_float, ArgumentParser
 from .checkpoint import construct_path_suffix, Checkpointer
 from .init import load_model, Initializer
 from .mlm import mask_tokens
 from .optim import LR, configure_optimizers
 
 
-class Formatter(argparse.ArgumentDefaultsHelpFormatter,
-                argparse.MetavarTypeHelpFormatter,
-                argparse.RawDescriptionHelpFormatter):
-    pass
-
-parser = argparse.ArgumentParser(description="hala trains attention models", formatter_class=Formatter)
+parser = ArgumentParser(description="hala trains attention models", formatter_class=Formatter)
 Initializer.add_arguments(parser)
 parser.add_argument("--train", type=str, help="Path to training data")
 parser.add_argument("--eval", type=str, help="Path to validation data")
@@ -45,7 +40,7 @@ parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="
 parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
 parser.add_argument("--block_size", type=int, default=1024, help="Block size")
 
-parser.add_argument("--max_iters", type=int, default=200000, help="Total number of training iterations")
+parser.add_argument("--max_iters", type=int_or_float, default=200000, help="Total number of training iterations")
 parser.add_argument("--grad_clip", type=float, default=1.0, help="Value to clip gradients at, set to 0.0 to disable")
 
 parser.add_argument("--lora", action="store_true", help="Train LoRA adapter")
@@ -176,6 +171,7 @@ if args.wandb and master_process:
 
 train_updates = len(train_data) // args.block_size // args.batch_size
 train_batches = train_updates // args.gradient_accumulation_steps
+max_iters = args.max_iters if isinstance(args.max_iters, int) else int(train_batches * args.max_iters)
 
 X, Y = get_batch(train_data, iter_num * args.gradient_accumulation_steps) # fetch the very first batch
 if master_process:
@@ -256,7 +252,7 @@ while args.train:
     iter_num += 1
 
     # termination conditions
-    if iter_num > args.max_iters:
+    if iter_num > max_iters:
         break
 
 
