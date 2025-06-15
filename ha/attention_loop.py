@@ -85,8 +85,11 @@ device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.au
 ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16}[args.dtype]
 ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
-val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
+if args.train:
+    train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
+
+if args.eval:
+    val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
 
 if master_process:
     checkpoint = Checkpointer(path=args.exp, save=args.save)
@@ -175,15 +178,17 @@ if args.wandb and master_process:
     import wandb
     wandb.init(config=args)
 
-train_updates = len(train_data) // args.block_size // args.batch_size
-train_batches = train_updates // args.gradient_accumulation_steps
-max_iters = args.max_iters if isinstance(args.max_iters, int) else int(train_batches * args.max_iters)
+if args.train:
+    train_updates = len(train_data) // args.block_size // args.batch_size
+    train_batches = train_updates // args.gradient_accumulation_steps
+    max_iters = args.max_iters if isinstance(args.max_iters, int) else int(train_batches * args.max_iters)
 
-X, Y = get_batch(train_data, iter_num * args.gradient_accumulation_steps) # fetch the very first batch
-if master_process:
-    print("Trainable params", sum(p.numel() for p in model.parameters() if p.requires_grad))
-    print("Train batches, updates:", train_batches, train_updates)
-    print(f"Tokens per step, update:", X.numel(), X.numel() * args.gradient_accumulation_steps)
+    X, Y = get_batch(train_data, iter_num * args.gradient_accumulation_steps) # fetch the very first batch
+
+    if master_process:
+        print("Trainable params", sum(p.numel() for p in model.parameters() if p.requires_grad))
+        print("Train batches, updates:", train_batches, train_updates)
+        print(f"Tokens per step, update:", X.numel(), X.numel() * args.gradient_accumulation_steps)
 
 t0 = time.time()
 while args.train:
