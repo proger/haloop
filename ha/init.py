@@ -61,7 +61,7 @@ class StridingAudioEncoderConfig(GPTConfig):
 
 
 def load_model(ckpt_path, *, map_location='cpu'):
-    checkpoint = torch.load(ckpt_path, map_location=map_location)
+    checkpoint = torch.load(ckpt_path, map_location=map_location, weights_only=False)
 
     if not 'vocab_size' in checkpoint['model_args']:
         # assume checkpoint for a large model
@@ -275,13 +275,13 @@ class Initializer:
             module = create_model(args.arch, compile=False).to(args.device)
             module = make_module(module)
 
-            checkpoint = torch.load(args.init[0], map_location=args.device)
+            checkpoint = torch.load(args.init[0], map_location=args.device, weights_only=False)
             module.load_state_dict(checkpoint)
             if len(args.init) > 1:
                 log('averaging models')
                 avg_model = torch.optim.swa_utils.AveragedModel(module)
                 for m in args.init[1:]:
-                    checkpoint = torch.load(m, map_location=args.device)
+                    checkpoint = torch.load(m, map_location=args.device, weights_only=False)
                     module.load_state_dict(checkpoint)
                     avg_model.update_parameters(module)
                 module = avg_model.module
