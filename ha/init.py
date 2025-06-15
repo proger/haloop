@@ -276,12 +276,16 @@ class Initializer:
             module = make_module(module)
 
             checkpoint = torch.load(args.init[0], map_location=args.device, weights_only=False)
+            if "model" in checkpoint:
+                checkpoint = checkpoint["model"]
             module.load_state_dict(checkpoint)
             if len(args.init) > 1:
                 log('averaging models')
                 avg_model = torch.optim.swa_utils.AveragedModel(module)
                 for m in args.init[1:]:
                     checkpoint = torch.load(m, map_location=args.device, weights_only=False)
+                    if "model" in checkpoint:
+                        checkpoint = checkpoint["model"]
                     module.load_state_dict(checkpoint)
                     avg_model.update_parameters(module)
                 module = avg_model.module
