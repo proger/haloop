@@ -86,8 +86,7 @@ torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
 device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.autocast
-# note: float16 data type will automatically use a GradScaler
-ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[args.dtype]
+ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16}[args.dtype]
 ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
@@ -134,9 +133,6 @@ model, _, _ = initializer(args)
 model.train()
 
 assert args.block_size == model.config.block_size, "Block sizes don't match"
-
-# initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
 
 if args.lora:
     lora.attach_to_c_attn(model)
@@ -190,7 +186,6 @@ if master_process:
 t0 = time.time()
 while args.train:
     # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
     for micro_step in range(args.gradient_accumulation_steps):
         if ddp:
             # in DDP training we only need to sync gradients at the last micro step.
@@ -202,10 +197,10 @@ while args.train:
             loss = model.forward_all(X, Y)
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch(train_data, (iter_num * args.gradient_accumulation_steps + micro_step) % train_batches)
-        # backward pass, with gradient scaling if training in fp16
+        # backward pass
         if torch.isnan(loss):
             break
-        scaler.scale(loss).backward()
+        loss.backward()
     if torch.isnan(loss):
         print("loss is NaN, skipping this update")
         continue
@@ -216,13 +211,11 @@ while args.train:
 
     # clip the gradient
     if args.grad_clip != 0.0:
-        scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         log_dict["train/grad_norm"] = grad_norm
 
-    # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
-    scaler.update()
+    # step the optimizer
+    optimizer.step()
     # flush the gradients as soon as we can, no need for this memory anymore
     optimizer.zero_grad(set_to_none=True)
 
