@@ -28,6 +28,7 @@ parser = ArgumentParser(description="hala trains attention models", formatter_cl
 Initializer.add_arguments(parser)
 parser.add_argument("--train", type=str, help="Path to training data")
 parser.add_argument("--eval", type=str, help="Path to validation data")
+parser.add_argument("--mmap-dtype", type=str, default="uint16", help="mmap data type for --train and --eval")
 parser.add_argument("--eval_bytes", default=0.0, type=float, help="How many payload bytes the evaluation set contains")
 parser.add_argument("--objective", choices=["lm", "denoise", "cond"], default="lm", type=str, help="lm: predict next token; denoise: predict masked tokens; cond: predict one last token in the sequence")
 parser.add_argument("--train-shuffle", action='store_true', help="If True, randomly samples batches from the training set")
@@ -86,10 +87,10 @@ ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16}[args.dtype]
 ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 if args.train:
-    train_data = np.memmap(args.train, dtype=np.uint16, mode="r")
+    train_data = np.memmap(args.train, dtype=args.mmap_dtype, mode="r")
 
 if args.eval:
-    val_data = np.memmap(args.eval, dtype=np.uint16, mode="r")
+    val_data = np.memmap(args.eval, dtype=args.mmap_dtype, mode="r")
 
 if master_process:
     checkpoint = Checkpointer(path=args.exp, save=args.save)
