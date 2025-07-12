@@ -191,9 +191,9 @@ def tokenize_bytes(text_file, vocab, extend_vocab=False, device='cpu'):
     if vocab is None:
         vocab = Vocabulary.bytes()
 
-    print(f"Memory mapping bytes from: {text_file}", file=sys.stderr)
-    s = torch.ByteStorage.from_file(str(text_file), size=Path(text_file).stat().st_size, shared=False)
-    data = torch.ByteTensor(s)
+    print(f"Reading bytes from: {text_file}", file=sys.stderr)
+    with open(text_file, 'rb') as text:
+        data = torch.tensor(list(text.read()), device=device, dtype=torch.uint8)
     return data, vocab
 
 
@@ -243,6 +243,7 @@ class SymbolTapeNoPad:
         self.tape_len = math.ceil(len(data) / batch_size)
         self.tape_parts, self.trailing_tokens = divmod(self.tape_len, bptt_len)
         self.data = data
+        self.pad_value = 0
 
     def __len__(self):
         return self.tape_parts + int(bool(self.trailing_tokens))
@@ -250,7 +251,7 @@ class SymbolTapeNoPad:
     def __getitem__(self, i):
         if i == 0:
             # first batch: add pad_id token in the beginning
-            batch = self.data.new_full((self.bptt_len, self.batch_size), -2323)
+            batch = self.data.new_full((self.bptt_len, self.batch_size), self.pad_value)
 
             for tape_index in range(self.batch_size):
                 offset = tape_index * (self.tape_len - 1)
@@ -259,7 +260,7 @@ class SymbolTapeNoPad:
                 batch[:len(part), tape_index] = part
         elif i == self.tape_parts:
             # last batch: truncate
-            batch = self.data.new_full((self.trailing_tokens, self.batch_size), -2323)
+            batch = self.data.new_full((self.trailing_tokens, self.batch_size), self.pad_value)
 
             for tape_index in range(self.batch_size):
                 # remove one for the padding in batch 0
@@ -268,7 +269,7 @@ class SymbolTapeNoPad:
                 batch[:len(part), tape_index] = part
         else:
             # other batches: account for the padding in batch 0
-            batch = self.data.new_full((self.bptt_len, self.batch_size), -2323)
+            batch = self.data.new_full((self.bptt_len, self.batch_size), self.pad_value)
 
             for tape_index in range(self.batch_size):
                 offset = tape_index * (self.tape_len - 1)
