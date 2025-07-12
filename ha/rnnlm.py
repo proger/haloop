@@ -223,8 +223,13 @@ class System:
                     for _ in range(count):
                         sys.stdout.write("\b \b")  # backspace + space + backspace (to erase)
 
-                if self.args.hyp:
-                    ref = self.vocab.decode(input.squeeze().tolist())[0]
+                if self.args.hyp or self.args.chunk:
+                    ref = self.vocab.decode(input.squeeze(0).tolist())[0]
+
+                    if isinstance(hyp, bytes):
+                        hyp = ''.join([f'{x:x}' for x in list(hyp)])
+                    if isinstance(ref, bytes):
+                        ref = ''.join([f'{x:x}' for x in list(ref)])
 
                     def longest_common_prefix(a, b):
                         i = 0
@@ -233,7 +238,15 @@ class System:
                         return a[:i], a[i:], b[i:]
 
                     matched, delete, insert = longest_common_prefix(hyp, ref)
-                    print(f"[cyan]{matched}[/cyan][magenta]{delete}[/magenta]{insert}", end='')
+
+                    if self.args.chunk:
+                        if matched:
+                            print(f"[cyan]{matched}[/cyan]", end='')
+                        else:
+                            print(f"[magenta]{insert}[/magenta]", end='')
+                    else:  # self.args.hyp
+                        print(f"[cyan]{matched}[/cyan][magenta]{delete}[/magenta]{insert}", end='')
+
                     with torch.inference_mode():
                         model.eval()
                         hyp = self.sample(output, state, steps=self.args.bptt_len, top_k=self.args.top_k)
@@ -323,6 +336,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=1, help="Number of batches between printing training status")
     parser.add_argument('--hyp', action='store_true', help="Continue the training data for bptt_len steps for visualization. Supersedes --complete/--complete-file.")
+    parser.add_argument('--chunk', action='store_true', help="Chunk the output using the principle of history compression. Supersedes --hyp.")
     parser.add_argument('--complete', type=str, nargs='+', help="Prompts to complete during evaluation")
     parser.add_argument('--start-token', type=str, default='\n', help="Prepend this token to every prompt. This token is necessary to compute p(prompt|start-token)")
     parser.add_argument('--complete-file', type=Path, nargs='+', help="Prompts to complete during evaluation as a file. First column is utterance id.")
@@ -339,12 +353,15 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 
         try:
             self.train_one_epoch(step=self.step)
-            print('saving', args.save)
-            torch.save(self.make_state_dict(), args.save)
+            if args.save:
+                print('saving', args.save)
+                torch.save(self.make_state_dict(), args.save)
         except KeyboardInterrupt:
-            print('saving', args.save)
-            torch.save(self.make_state_dict(), args.save)
-        print('resume training with --init', args.save)
+            if args.save:
+                print('saving', args.save)
+                torch.save(self.make_state_dict(), args.save)
+        if args.save:
+            print('resume training with --init', args.save)
 
     prompt_scores, outputs = self.evaluate()
     if prompt_scores.numel():
