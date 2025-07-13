@@ -275,9 +275,9 @@ class System:
 
         if self.args.chunk:
             with open(self.args.chunk, 'w') as f:
-                __builtins__.print(f"matches {matches}", file=f)
-                __builtins__.print(f"insertions {insertions}", file=f)
-                __builtins__.print(f"total {total}", )
+                f.write(f"matches {matches}\n")
+                f.write(f"insertions {insertions}\n")
+                f.write(f"total {total}\n")
 
         return self.step
 
