@@ -14,9 +14,12 @@ tail -c 10000 data/bruk.txt > data/bruk-test10k.txt
 
 export WANDB_MODE=disabled
 
-# train for 1 epoch
-hal --train bytes:data/bruk125k.txt --reset-step 0 --wd 0.001 --save exp/bruk125k.txt
+for split in 125k 250k 500k 1m 2m 4m 8m; do
+    # train for 1 epoch
+    hal --train bytes:data/bruk$split.txt --reset-step 0 --wd 0.001 --save exp/bruk$split.pt
 
-# test chunking on a small test set
-# printed hex bytes are magenta when there's a new token (a new insertion). total number of insertions (tokens) is printed at the end.
-hal --train bytes:data/bruk-test10k.txt --reset-step 0 --wd 0  --init exp/bruk125k.txt --save '' --chunk --bptt-len 1 --lr 0
+    # test chunking on a small test set
+    # printed hex bytes are magenta when there's a new token (a new insertion). total number of insertions (tokens) is printed at the end.
+    hal --train bytes:data/bruk-test10k.txt --reset-step 0 --wd 0  --init exp/bruk$split.pt --save '' --chunk --bptt-len 1 --lr 0 | tee exp/result$split.txt
+done
+
