@@ -229,9 +229,9 @@ class System:
                     ref = self.vocab.decode(input.squeeze(0).tolist())[0]
 
                     if isinstance(hyp, bytes):
-                        hyp = ''.join([f'{x:x}' for x in list(hyp)])
+                        hyp = ''.join([f'{x:02x}' for x in list(hyp)])
                     if isinstance(ref, bytes):
-                        ref = ''.join([f'{x:x}' for x in list(ref)])
+                        ref = ''.join([f'{x:02x}' for x in list(ref)])
 
                     def longest_common_prefix(a, b):
                         i = 0
