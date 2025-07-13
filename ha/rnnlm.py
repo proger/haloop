@@ -198,7 +198,7 @@ class System:
         model.train()
         optimizer.zero_grad(set_to_none=True)
         state = self.state
-        prompt = self.prompt
+        prompt = self.prompt.to(self.args.device)
         hyp = ''
         matches, insertions, total = 0, 0, 0
 
