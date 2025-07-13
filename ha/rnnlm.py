@@ -359,7 +359,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 
     if args.train:
         print(args)
-        wandb.init(project='rnnlm', config=args)
+        wandb.init(config=args)
 
         for epoch in range(args.epochs):
             save = None
