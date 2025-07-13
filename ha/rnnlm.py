@@ -197,6 +197,7 @@ class System:
         state = self.state
         prompt = self.prompt
         hyp = ''
+        insertions = 0
 
         for i, batch in enumerate(batches):
             if step > i:
@@ -247,6 +248,8 @@ class System:
                     else:  # self.args.hyp
                         print(f"[cyan]{matched}[/cyan][magenta]{delete}[/magenta]{insert}", end='')
 
+                    insertions += len(insert)
+
                     with torch.inference_mode():
                         model.eval()
                         hyp = self.sample(output, state, steps=self.args.bptt_len, top_k=self.args.top_k)
@@ -269,6 +272,9 @@ class System:
 
             if self.args.max_steps >= 0 and i == self.args.max_steps:
                 break
+
+        if self.args.chunk:
+            print(f"insertions: {insertions}")
 
         return self.step
 
@@ -321,7 +327,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 """)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--reset-step', type=int, help="Rewind data to this step")
-    parser.add_argument('--save', type=Path, default='rnnlm.pt', help="Path to save checkpoint to")
+    parser.add_argument('--save', type=str, default='rnnlm.pt', help="Path to save checkpoint to")
     parser.add_argument('--device', type=str, default='cpu', help='device')
     parser.add_argument('--lr', default=0.002, type=float, help='AdamW learning rate')
     parser.add_argument('--wd', default=0.1, type=float, help='AdamW weight decay')
