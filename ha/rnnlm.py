@@ -379,6 +379,8 @@ To compute BPC on evaluation data from files (first column is ignored) try:
             if save:
                 print('resume training with --init', save)
 
+            self.step = 0  # reset step counter for the new epoch
+
     prompt_scores, outputs = self.evaluate()
     if prompt_scores.numel():
         for prompt_score, output in zip(prompt_scores, outputs):
