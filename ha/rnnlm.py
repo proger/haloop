@@ -53,7 +53,10 @@ class System:
         self.vocab = None
 
         if args.init:
-            torch.serialization.safe_globals([pathlib._local.PosixPath])
+            try:
+                torch.serialization.safe_globals([pathlib._local.PosixPath])
+            except AttributeError:
+                torch.serialization.safe_globals([pathlib.PosixPath])
 
             checkpoint = torch.load(args.init, weights_only=False)
             self.vocab = Vocabulary()
