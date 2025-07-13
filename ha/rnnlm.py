@@ -197,8 +197,7 @@ class System:
         state = self.state
         prompt = self.prompt
         hyp = ''
-        insertions = 0
-        total = 0
+        matches, insertions, total = 0, 0, 0
 
         for i, batch in enumerate(batches):
             if step > i:
@@ -228,11 +227,6 @@ class System:
                 if self.args.hyp or self.args.chunk:
                     ref = self.vocab.decode(input.squeeze(0).tolist())[0]
 
-                    if isinstance(hyp, bytes):
-                        hyp = ''.join([f'{x:02x}' for x in list(hyp)])
-                    if isinstance(ref, bytes):
-                        ref = ''.join([f'{x:02x}' for x in list(ref)])
-
                     def longest_common_prefix(a, b):
                         i = 0
                         while i < min(len(a), len(b)) and a[i] == b[i]:
@@ -241,14 +235,20 @@ class System:
 
                     matched, delete, insert = longest_common_prefix(hyp, ref)
 
+                    matches += len(matched)
+                    insertions += len(insert)
+                    total += len(ref)
+
+                    if isinstance(matched, bytes):
+                        matched = ''.join([f'{x:02x}' for x in list(matched)])
+                        delete = ''.join([f'{x:02x}' for x in list(delete)])
+                        insert = ''.join([f'{x:02x}' for x in list(insert)])
+
                     if self.args.chunk:
                         # do not print deletions in chunking mode, we don't care of the network prediction
                         print(f"[cyan]{matched}[/cyan][magenta]{insert}[/magenta]", end='')
                     else:  # self.args.hyp
                         print(f"[cyan]{matched}[/cyan][magenta]{delete}[/magenta]{insert}", end='')
-
-                    insertions += len(insert)
-                    total += len(ref)
 
                     with torch.inference_mode():
                         model.eval()
@@ -274,8 +274,10 @@ class System:
                 break
 
         if self.args.chunk:
-            print(f"\ninsertions: {insertions}")
-            print(f"total units: {total}")
+            with open(self.args.chunk, 'w') as f:
+                print(f"matches {matches}", file=f)
+                print(f"insertions {insertions}", file=f)
+                print(f"total {total}", )
 
         return self.step
 
@@ -343,7 +345,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
     parser.add_argument('--top-k', type=int, default=1, help='top-k sampling')
     parser.add_argument('--log-interval', type=int, default=1, help="Number of batches between printing training status")
     parser.add_argument('--hyp', action='store_true', help="Continue the training data for bptt_len steps for visualization. Supersedes --complete/--complete-file.")
-    parser.add_argument('--chunk', action='store_true', help="Chunk the output using the principle of history compression. Supersedes --hyp.")
+    parser.add_argument('--chunk', type=str, help="Chunk the output using the principle of history compression and store the counts to file. Supersedes --hyp.")
     parser.add_argument('--complete', type=str, nargs='+', help="Prompts to complete during evaluation")
     parser.add_argument('--start-token', type=str, default='\n', help="Prepend this token to every prompt. This token is necessary to compute p(prompt|start-token)")
     parser.add_argument('--complete-file', type=Path, nargs='+', help="Prompts to complete during evaluation as a file. First column is utterance id.")
