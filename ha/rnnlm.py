@@ -198,6 +198,7 @@ class System:
         prompt = self.prompt
         hyp = ''
         insertions = 0
+        total = 0
 
         for i, batch in enumerate(batches):
             if step > i:
@@ -241,14 +242,13 @@ class System:
                     matched, delete, insert = longest_common_prefix(hyp, ref)
 
                     if self.args.chunk:
-                        if matched:
-                            print(f"[cyan]{matched}[/cyan]", end='')
-                        else:
-                            print(f"[magenta]{insert}[/magenta]", end='')
+                        # do not print deletions in chunking mode, we don't care of the network prediction
+                        print(f"[cyan]{matched}[/cyan][magenta]{insert}[/magenta]", end='')
                     else:  # self.args.hyp
                         print(f"[cyan]{matched}[/cyan][magenta]{delete}[/magenta]{insert}", end='')
 
                     insertions += len(insert)
+                    total += len(ref)
 
                     with torch.inference_mode():
                         model.eval()
@@ -274,7 +274,8 @@ class System:
                 break
 
         if self.args.chunk:
-            print(f"insertions: {insertions}")
+            print(f"\ninsertions: {insertions}")
+            print(f"total units: {total}")
 
         return self.step
 

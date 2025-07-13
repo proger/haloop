@@ -1,4 +1,4 @@
-mkdir -p data
+mkdir -p data exp
 wget -O data/bruk.txt --continue https://gist.githubusercontent.com/proger/5be9c7e095839d11563e1925147ba9f4/raw/dfb19c8a31c51863755dd6f2469430c90977e128/bruk.txt
 # make train splits
 head -c 125000 data/bruk.txt > data/bruk125k.txt
