@@ -239,7 +239,7 @@ class System:
                     insertions += len(insert)
                     total += len(ref)
 
-                    if isinstance(matched, bytes):
+                    if isinstance(ref, bytes):
                         matched = ''.join([f'{x:02x}' for x in list(matched)])
                         delete = ''.join([f'{x:02x}' for x in list(delete)])
                         insert = ''.join([f'{x:02x}' for x in list(insert)])
@@ -335,6 +335,7 @@ To compute BPC on evaluation data from files (first column is ignored) try:
     parser.add_argument('--lr', default=0.002, type=float, help='AdamW learning rate')
     parser.add_argument('--wd', default=0.1, type=float, help='AdamW weight decay')
     parser.add_argument('--dropout', default=0, type=float, help='dropout rate')
+    parser.add_argument('--epochs', default=1, type=int, help='number of passes over the training data')
     parser.add_argument('--max-steps', default=-1, type=int, help='maximum number of training steps (useful for e.g. lr search)')
     parser.add_argument('--batch-size', default=1, type=int, help='batch size')
     parser.add_argument('--bptt-len', default=64, type=int, help='RNN sequence length (window size)')
@@ -360,17 +361,23 @@ To compute BPC on evaluation data from files (first column is ignored) try:
         print(args)
         wandb.init(project='rnnlm', config=args)
 
-        try:
-            self.train_one_epoch(step=self.step)
+        for epoch in range(args.epochs):
+            save = None
             if args.save:
-                print('saving', args.save)
-                torch.save(self.make_state_dict(), args.save)
-        except KeyboardInterrupt:
-            if args.save:
-                print('saving', args.save)
-                torch.save(self.make_state_dict(), args.save)
-        if args.save:
-            print('resume training with --init', args.save)
+                save = args.save.format(epoch=epoch)
+
+            try:
+                self.train_one_epoch(step=self.step)
+                if save:
+                    print('saving', save)
+                    torch.save(self.make_state_dict(), save)
+            except KeyboardInterrupt:
+                if save:
+                    print('saving', save)
+                    torch.save(self.make_state_dict(), save)
+
+            if save:
+                print('resume training with --init', save)
 
     prompt_scores, outputs = self.evaluate()
     if prompt_scores.numel():
