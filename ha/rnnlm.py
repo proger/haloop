@@ -191,7 +191,7 @@ class System:
 
         return joiner.join(out_list)
 
-    def train_one_epoch(self, step=0):
+    def train_one_epoch(self):
         model, batches = self.model, self.batches
         optimizer = self.optimizer
 
@@ -203,7 +203,7 @@ class System:
         matches, insertions, total = 0, 0, 0
 
         for i, batch in enumerate(batches):
-            if step > i:
+            if self.step > i:
                 continue
 
             batch = batch.to(self.args.device).long().squeeze(0)
@@ -269,9 +269,13 @@ class System:
                        'train/lr': self.args.lr,
                        'train/grad_norm': grad_norm.item()})
 
-            self.step = i + 1
             self.state = state
             self.prompt = prompt
+
+            if self.step % self.args.save_interval == 0:
+                self.save()
+
+            self.step = i + 1
 
             if self.args.max_steps >= 0 and i == self.args.max_steps:
                 break
@@ -310,6 +314,15 @@ class System:
 
         return torch.tensor(prompt_scores), outputs
 
+    def save(self):
+        save = None
+        if self.args.save:
+            save = self.args.save.format(epoch=self.epoch, step=self.step)
+
+        if save:
+            print('saving', save)
+            torch.save(self.make_state_dict(), save)
+
 
 def main():
     parser = argparse.ArgumentParser(description="hal trains recurrent language models",
@@ -333,7 +346,8 @@ To compute BPC on evaluation data from files (first column is ignored) try:
 """)
     parser.add_argument('--init', type=Path, help="Path to checkpoint to initialize from")
     parser.add_argument('--reset-step', type=int, help="Rewind data to this step")
-    parser.add_argument('--save', type=str, default='rnnlm.pt', help="Path to save checkpoint to")
+    parser.add_argument('--save', type=str, default='rnnlm-epoch{epoch}-step{step}.pt', help="Path to save checkpoint to. Substitutes {epoch} and {step} using str.format")
+    parser.add_argument('--save-interval', type=int, default=100000, help="Save interval in steps in addition to once every epoch")
     parser.add_argument('--device', type=str, default='cpu', help='device')
     parser.add_argument('--lr', default=0.002, type=float, help='AdamW learning rate')
     parser.add_argument('--wd', default=0.1, type=float, help='AdamW weight decay')
@@ -365,22 +379,14 @@ To compute BPC on evaluation data from files (first column is ignored) try:
         wandb.init(config=args)
 
         for epoch in range(args.epochs):
-            save = None
-            if args.save:
-                save = args.save.format(epoch=epoch)
+            self.epoch = epoch
 
             try:
-                self.train_one_epoch(step=self.step)
-                if save:
-                    print('saving', save)
-                    torch.save(self.make_state_dict(), save)
+                self.train_one_epoch()
             except KeyboardInterrupt:
-                if save:
-                    print('saving', save)
-                    torch.save(self.make_state_dict(), save)
-
-            if save:
-                print('resume training with --init', save)
+                pass
+            finally:
+                self.save()
 
             self.step = 0  # reset step counter for the new epoch
 
