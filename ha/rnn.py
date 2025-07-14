@@ -37,6 +37,13 @@ class Decoder(nn.Module):
 
         self.embedding = nn.Embedding(vocab_size, emb_dim)
         self.rnn = nn.LSTM(emb_dim, hidden_dim, num_layers, dropout=dropout)
+
+        with torch.no_grad():
+            # kick the forget gates
+            for i in range(num_layers):
+                getattr(self.rnn, f'bias_ih_l{i}').chunk(4)[1].add_(1)
+                getattr(self.rnn, f'bias_hh_l{i}').chunk(4)[1].add_(1)
+
         self.out_layer = nn.Linear(hidden_dim, vocab_size)
 
         self.out_layer.weight = self.embedding.weight

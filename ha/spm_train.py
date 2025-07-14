@@ -12,7 +12,7 @@ args = parser.parse_args()
 
 with open(args.model, 'wb') as model_writer:
     spm.SentencePieceTrainer.train(
-        sentence_iterator=iter([open(args.corpus_txt).read()]),
+        sentence_iterator=iter([open(args.corpus_txt, 'rb').read().decode('utf-8', errors='ignore')]),
         max_sentence_length=1<<31-1,
         model_writer=model_writer,
         vocab_size=args.vocab_size,
