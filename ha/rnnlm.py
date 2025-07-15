@@ -106,8 +106,8 @@ class System:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
         if args.init:
-            self.state = checkpoint['state']
-            self.prompt = checkpoint['prompt']
+            self.state = checkpoint['state'][:, :args.batch_size]  # truncate to the test batch size
+            self.prompt = checkpoint['prompt'][:, :args.batch_size]
         else:
             self.state = self.model.init_hidden(args.batch_size)
             self.prompt = torch.zeros((1, args.batch_size), dtype=torch.long, device=args.device)
