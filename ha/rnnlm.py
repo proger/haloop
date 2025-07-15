@@ -58,7 +58,7 @@ class System:
             except AttributeError:
                 torch.serialization.safe_globals([pathlib.PosixPath])
 
-            checkpoint = torch.load(args.init, weights_only=False)
+            checkpoint = torch.load(args.init, weights_only=False, map_location=args.device)
             self.vocab = Vocabulary()
             self.vocab.load_state_dict(checkpoint['vocab'])
             extend_vocab = False
@@ -222,7 +222,7 @@ class System:
             optimizer.zero_grad(set_to_none=True)
 
             if i % self.log_interval == 0:
-                train_bpc = loss.item() / math.log(2)
+                train_bpt = loss.item() / math.log(2)
 
                 def erase(count):
                     for _ in range(count):
@@ -262,7 +262,7 @@ class System:
                 else:
                     _, eval_outputs = self.evaluate()
 
-                    print(f"step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} bpc: {train_bpc:.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(eval_outputs)}")
+                    print(f"step {i}/{len(batches)} loss: {loss.item():.3f} ppl: {loss.exp().item():.3f} bpt: {train_bpt:.3f} grad_norm: {grad_norm.item():.3f} {'; '.join(eval_outputs)}")
 
                 model.train()
             wandb.log({'train/loss': loss.item(),
@@ -394,8 +394,8 @@ To compute BPC on evaluation data from files (first column is ignored) try:
     prompt_scores, outputs = self.evaluate()
     if prompt_scores.numel():
         for prompt_score, output in zip(prompt_scores, outputs):
-            print('{:.2f}'.format(prompt_score), 'bpc', output)
-        print('mean bpc', torch.mean(prompt_scores).item())
+            print('{:.2f}'.format(prompt_score), 'bpt', output)
+        print('mean bpt', torch.mean(prompt_scores).item())
 
 if __name__ == '__main__':
     main()
