@@ -106,7 +106,8 @@ class System:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
         if args.init:
-            self.state = checkpoint['state'][:, :args.batch_size]  # truncate to the test batch size
+            (h, c) = checkpoint['state']  # truncate to the test batch size
+            self.state = h[:, :args.batch_size], c[:, :args.batch_size]
             self.prompt = checkpoint['prompt'][:, :args.batch_size]
         else:
             self.state = self.model.init_hidden(args.batch_size)
