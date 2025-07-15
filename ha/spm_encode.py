@@ -7,6 +7,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, help='bpe model filename')
 parser.add_argument('--block', type=int, help='one document per line, padded up to this many tokens')
 parser.add_argument('--repeat', default=1, type=int, help='repeat the output this many times')
+parser.add_argument('--bits', default=32, type=int, help='use this many bits to encode one token')
 parser.add_argument('input_txt', type=str)
 parser.add_argument('output_bin', type=str)
 args = parser.parse_args()
@@ -42,7 +43,11 @@ else:
 ids = ids * args.repeat
 real_bytes = real_bytes * args.repeat
 
-arr = np.memmap(args.output_bin, dtype=np.uint16, mode='w+', shape=(len(ids),))
+dtype = {
+    16: np.uint16,
+    32: np.uint32,
+}[args.bits]
+arr = np.memmap(args.output_bin, dtype=dtype, mode='w+', shape=(len(ids),))
 arr[:] = ids
 arr.flush()
 print("wrote", len(ids), "tokens to", args.output_bin, "real bytes", real_bytes)
